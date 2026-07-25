@@ -41,15 +41,15 @@ Client applications may use Firebase's public client configuration. Stripe secre
 
 ## Marketplace payments
 
-Stripe continues to bill buyer and producer access subscriptions on the website.
-Stripe Connect is optional for product sales. An order uses online Stripe checkout
-only when every producer in that cart has opted in and has an active Connect account.
-The backend transfers each producer's item subtotal to that producer. Otherwise, the
-order is recorded without an online charge and the buyer arranges payment directly
-with each producer.
+Buyer access and ordering are free. Stripe bills only producer selling subscriptions
+on the website. Stripe Connect is optional for product sales. An order uses online
+Stripe checkout only when every producer in that cart has opted in and has an active
+Connect account. The backend transfers each producer's item subtotal to that producer.
+Otherwise, the order is recorded without an online charge and the buyer arranges
+payment directly with each producer.
 
 ## Google Play preparation
 
 The Android app targets API 36 and uses a private upload key stored outside version
-control. Its native subscription screen is consumption-only and does not launch
-Stripe subscription enrollment.
+control. Buyers enter the marketplace for free. Its producer subscription screen is
+consumption-only and does not launch Stripe subscription enrollment.

@@ -75,6 +75,7 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
         email: firebaseUser.email ?? null,
         displayName: firebaseUser.displayName ?? null,
         role,
+        buyerProfileComplete: data.buyerProfileComplete === true,
         subscriptionStatus: normalizeSubscriptionStatus(
           data.subscription?.status ?? data.subscriptionStatus
         ),
@@ -86,6 +87,9 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
         producerTermsAcceptedAt: data.producerTerms?.acceptedAt ?? null,
         producerOnboardingComplete: data.producerOnboarding?.completed === true,
         producerPaymentPreference: data.producerOnboarding?.paymentPreference ?? null,
+        hasStripeConnectAccount: Boolean(
+          data.stripeConnectAccountId || data.stripeAccountId
+        ),
       };
     }
 
@@ -94,16 +98,19 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       email: firebaseUser.email ?? null,
       displayName: firebaseUser.displayName ?? null,
       role: fallbackRole,
+      buyerProfileComplete: false,
       subscriptionStatus: SubscriptionStatus.NONE,
       userAgreementAcceptedAt: null,
       producerTermsVersion: null,
       producerTermsAcceptedAt: null,
       producerOnboardingComplete: false,
       producerPaymentPreference: null,
+      hasStripeConnectAccount: false,
     };
 
     await setDoc(userRef, {
       role: newProfile.role,
+      buyerProfileComplete: false,
       subscriptionStatus: newProfile.subscriptionStatus,
       userAgreementAcceptedAt: null,
       createdAt: serverTimestamp(),
@@ -201,6 +208,19 @@ const StartSubscription: React.FC = () => {
         return;
       }
 
+      if (user.role === UserRole.BUYER) {
+        if (!user.userAgreementAcceptedAt) {
+          navigate("/agreement", { replace: true });
+          return;
+        }
+        if (!user.buyerProfileComplete) {
+          navigate("/onboarding", { replace: true });
+          return;
+        }
+        navigate("/buyer", { replace: true });
+        return;
+      }
+
       if (user.role === UserRole.PRODUCER) {
         if (
           user.producerTermsVersion !== PRODUCER_TERMS_VERSION ||
@@ -213,9 +233,6 @@ const StartSubscription: React.FC = () => {
           navigate("/producer/setup", { replace: true });
           return;
         }
-      } else if (!user.userAgreementAcceptedAt) {
-        navigate("/agreement", { replace: true });
-        return;
       }
 
       if (user.subscriptionStatus === SubscriptionStatus.ACTIVE) {
@@ -251,8 +268,8 @@ const StartSubscription: React.FC = () => {
         <section className="mx-auto max-w-xl rounded-2xl bg-white p-7 text-center shadow-lg">
           <h1 className="text-2xl font-bold text-stone-900">Subscription required</h1>
           <p className="mt-3 text-stone-700">
-            This Google Play app is for accounts with an active Maine Farm Market subscription.
-            Subscription enrollment and billing are managed outside the Android app.
+            Producers need an active Maine Farm Market selling subscription.
+            Producer enrollment and billing are managed outside the Android app.
           </p>
           <p className="mt-3 text-sm text-stone-600">
             After your account is activated, return here and sign in again.

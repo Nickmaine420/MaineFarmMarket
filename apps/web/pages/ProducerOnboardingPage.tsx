@@ -33,7 +33,8 @@ export default function ProducerOnboardingPage() {
         setDescription(String(data.description || ""));
         setPaymentPreference(
           data.paymentPreference === "stripe" ||
-            user.producerPaymentPreference === "stripe"
+            user.producerPaymentPreference === "stripe" ||
+            user.hasStripeConnectAccount
             ? "stripe"
             : "direct"
         );
@@ -223,4 +224,3 @@ export default function ProducerOnboardingPage() {
     </main>
   );
 }
-

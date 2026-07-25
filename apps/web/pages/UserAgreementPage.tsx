@@ -20,8 +20,8 @@ You will use the platform only for lawful purposes. You will not harass other us
 3. Transactions
 Buyers and producers are responsible for their own transactions. The platform facilitates connections but is not a party to sales. Producers are responsible for product quality, fulfillment, and compliance with applicable laws.
 
-4. Subscription
-Access to the marketplace requires an active subscription. Fees are billed in advance. You may cancel in accordance with the subscription terms.
+4. Access and producer subscriptions
+Buyer access is free. Producers must maintain the applicable paid selling subscription to create or update marketplace listings. Product payments are separate from producer subscription billing.
 
 5. Privacy
 We collect and use account and usage data as described in our privacy practices. By using the platform you consent to such collection and use.

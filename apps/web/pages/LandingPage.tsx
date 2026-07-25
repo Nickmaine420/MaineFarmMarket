@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../App';
-import { UserRole, SubscriptionStatus } from '../types';
+import { UserRole } from '../types';
 import { PRICING } from '../constants';
 
 const LandingPage = () => {
@@ -26,10 +26,6 @@ const LandingPage = () => {
 
   // If already logged in, skip buttons entirely
   if (user) {
-    const norm = String(user.subscription?.status || '').toLowerCase();
-    const active = norm === 'active' || norm === 'trialing' || norm === 'paid' || norm === String(SubscriptionStatus.ACTIVE).toLowerCase();
-
-    if (active) return <Navigate to="/dashboard" replace />;
     return <Navigate to="/start-subscription" replace />;
   }
 
@@ -53,7 +49,7 @@ const LandingPage = () => {
               onClick={() => handleStart(UserRole.BUYER)}
               className="w-full md:w-auto px-8 py-4 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold text-lg transition shadow-lg"
             >
-              Access the Market (${PRICING.BUYER}/mo)
+              Shop the Market — Free
             </button>
 
             <button
@@ -97,7 +93,7 @@ const LandingPage = () => {
       <section className="py-16 bg-green-800 text-white text-center">
         <div className="max-w-2xl mx-auto px-4">
           <h2 className="text-3xl font-serif mb-6">Ready to support your local food system?</h2>
-          <p className="text-green-100 mb-8">Join the subscription-only marketplace designed to keep Maine farming sustainable and healthy.</p>
+          <p className="text-green-100 mb-8">Buyers join free. Producer subscriptions help keep this Maine marketplace sustainable and healthy.</p>
           <button
             onClick={() => handleStart(UserRole.BUYER)}
             className="px-10 py-4 bg-white text-green-900 rounded-full font-bold hover:bg-stone-100 transition"

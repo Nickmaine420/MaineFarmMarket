@@ -62,8 +62,7 @@ async function withStripeEventIdempotency(event, handler) {
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 
-// LIVE price IDs you provided:
-const BUYER_PRICE_ID = "price_1T3JYy1SYqHEo1MCZ0Xxd9yC";
+// LIVE producer subscription price ID:
 const PRODUCER_PRICE_ID = "price_1T3Jap1SYqHEo1MCwtv3riOT";
 const PRODUCER_TERMS_VERSION = "2026-07-25";
 
@@ -90,28 +89,6 @@ async function getUserOrThrow(uid) {
 function assertRole(user, allowedRoles) {
   if (!allowedRoles.includes(user.role)) {
     throw new HttpsError("permission-denied", "Insufficient role");
-  }
-}
-
-function assertActiveSubscription(uid, user) {
-  const docPath = `users/${uid}`;
-  const status = (user.subscription?.status || "").toLowerCase();
-  const currentPeriodEnd = user.subscription?.currentPeriodEnd;
-  const nowSec = Date.now() / 1000;
-  const activeStatuses = ["active", "trialing", "paid"];
-  const isActive = activeStatuses.includes(status);
-  const notExpired = !currentPeriodEnd || currentPeriodEnd / 1000 >= nowSec;
-  const allowed = isActive && notExpired;
-
-  console.log("[assertActiveSubscription]", {
-    uid,
-    docPath,
-    fieldsRead: { status: user.subscription?.status, currentPeriodEnd },
-    result: allowed,
-  });
-
-  if (!allowed) {
-    throw new HttpsError("failed-precondition", "Subscription not active");
   }
 }
 
@@ -347,7 +324,7 @@ async function createDirectMarketplaceOrder({
 }
 
 // ---------------------------
-// createCheckoutSession (buyer + producer subscriptions)
+// createCheckoutSession (producer subscriptions only)
 // NEW FLOW: always success -> /#/subscribe-success
 // cancel -> /#/ (landing)
 // ---------------------------
@@ -360,36 +337,31 @@ exports.createCheckoutSession = onCall(
       const uid = request.auth?.uid;
       if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
 
-      const { role, priceId: passedPriceId } = request.data || {};
-
-      const resolvedRole =
-        role === "producer" || role === "buyer" ? role : "buyer";
-
-      if (resolvedRole === "producer") {
-        const producer = await getUserOrThrow(uid);
-        const acceptedTerms =
-          producer.producerTerms?.accepted === true &&
-          producer.producerTerms?.version === PRODUCER_TERMS_VERSION;
-        if (!acceptedTerms) {
-          throw new HttpsError(
-            "failed-precondition",
-            "Accept the current producer terms before subscribing."
-          );
-        }
-        if (producer.producerOnboarding?.completed !== true) {
-          throw new HttpsError(
-            "failed-precondition",
-            "Complete producer account setup before subscribing."
-          );
-        }
+      const { role } = request.data || {};
+      if (role !== "producer") {
+        throw new HttpsError(
+          "failed-precondition",
+          "Buyer access is free and does not use subscription checkout."
+        );
       }
 
-      const priceId =
-        passedPriceId ||
-        (resolvedRole === "producer" ? PRODUCER_PRICE_ID : BUYER_PRICE_ID);
-
-      if (!priceId)
-        throw new HttpsError("invalid-argument", "Missing priceId");
+      const producer = await getUserOrThrow(uid);
+      assertRole(producer, ["producer"]);
+      const acceptedTerms =
+        producer.producerTerms?.accepted === true &&
+        producer.producerTerms?.version === PRODUCER_TERMS_VERSION;
+      if (!acceptedTerms) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Accept the current producer terms before subscribing."
+        );
+      }
+      if (producer.producerOnboarding?.completed !== true) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Complete producer account setup before subscribing."
+        );
+      }
 
       const appUrl = getAppUrl();
 
@@ -401,12 +373,12 @@ exports.createCheckoutSession = onCall(
 
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
-        line_items: [{ price: priceId, quantity: 1 }],
+        line_items: [{ price: PRODUCER_PRICE_ID, quantity: 1 }],
         success_url: successUrl,
         cancel_url: cancelUrl,
-        metadata: { uid, role: resolvedRole, type: `${resolvedRole}_subscription` },
+        metadata: { uid, role: "producer", type: "producer_subscription" },
         subscription_data: {
-          metadata: { uid, role: resolvedRole, type: `${resolvedRole}_subscription` },
+          metadata: { uid, role: "producer", type: "producer_subscription" },
         },
       });
 
@@ -432,6 +404,8 @@ exports.createCartCheckoutSession = onCall(
 
       const uid = request.auth?.uid;
       if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+      const user = await getUserOrThrow(uid);
+      assertRole(user, ["buyer"]);
 
       const data = request.data || {};
       const items = Array.isArray(data.items) ? data.items : [];
@@ -551,7 +525,6 @@ exports.createCartCheckoutSessionV2 = onCall(
 
       const user = await getUserOrThrow(uid);
       assertRole(user, ["buyer"]);
-      assertActiveSubscription(uid, user);
 
       const cartRef = db.collection("carts").doc(uid);
       const cartSnap = await cartRef.get();

@@ -53,11 +53,11 @@ npm run mobile:sync
 npm run mobile:bundle
 ```
 
-The Android app is consumption-only for marketplace subscriptions: users obtain or
-manage their Stripe-billed membership outside the app and sign in to use it. Product
-orders may use optional Stripe Connect only when every producer in the cart has opted
-in and completed payout setup; otherwise buyers arrange payment directly with the
-producers.
+Buyer access and ordering are free. Producers obtain or manage their Stripe-billed
+selling subscription outside the Android app and sign in to use producer features.
+Product orders may use optional Stripe Connect only when every producer in the cart
+has opted in and completed payout setup; otherwise buyers arrange payment directly
+with the producers.
 
 ## Recovery
 

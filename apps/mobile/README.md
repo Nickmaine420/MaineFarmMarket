@@ -17,6 +17,6 @@ signed release bundle with `npm run mobile:bundle`.
 Android build. Private upload keys, keystore passwords, service-account credentials,
 Stripe secret keys, and webhook secrets must never be committed.
 
-The Android subscription screen is consumption-only. It does not launch external
-Stripe subscription checkout from inside the app. Existing members can sign in and use
-the shared marketplace.
+Buyers use the Android marketplace without an access subscription. Producer
+subscription checkout is not launched inside the Android app; producers obtain or
+manage their selling subscription outside the app and then sign in.

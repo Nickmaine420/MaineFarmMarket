@@ -28,9 +28,9 @@ certificate may be supplied to Google Play when requested.
 
 ## Subscription behavior
 
-The Android app does not start Stripe subscription purchases. It lets existing
-members sign in and consume their subscribed marketplace access. Subscription signup
-and management remain on the website.
+Buyers access the marketplace and place orders without an access subscription. The
+Android app does not start producer Stripe subscription purchases. Producer
+subscription signup and management remain on the website.
 
 ## Before production rollout
 

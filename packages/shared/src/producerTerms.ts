@@ -27,7 +27,7 @@ export const PRODUCER_TERMS_SECTIONS = [
   {
     heading: "Fulfillment and payment",
     body:
-      "You are responsible for honoring accepted orders and clearly communicating pickup, delivery, cancellation, refund, and payment arrangements. Stripe Connect is optional for producer sales. If you do not enable Stripe payouts, you and the buyer are responsible for agreeing on an appropriate direct payment method. The separate Maine Farm Market access subscription may still be billed through Stripe.",
+      "You are responsible for honoring accepted orders and clearly communicating pickup, delivery, cancellation, refund, and payment arrangements. Stripe Connect is optional for producer sales. If you do not enable Stripe payouts, you and the buyer are responsible for agreeing on an appropriate direct payment method. Your separate producer selling subscription may still be billed through Stripe; buyers do not pay an access subscription.",
   },
   {
     heading: "Enforcement",
@@ -35,4 +35,3 @@ export const PRODUCER_TERMS_SECTIONS = [
       "Maine Farm Market may remove listings, restrict activity, suspend an account, preserve relevant records, or report conduct when reasonably necessary to protect users, comply with law, investigate suspected misuse, or enforce these terms.",
   },
 ] as const;
-

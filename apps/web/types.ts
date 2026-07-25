@@ -17,12 +17,14 @@ export interface UserProfile {
   role: UserRole;
   displayName: string | null;
   email: string | null;
+  buyerProfileComplete: boolean;
   subscriptionStatus: SubscriptionStatus;
   userAgreementAcceptedAt: unknown | null;
   producerTermsVersion: string | null;
   producerTermsAcceptedAt: unknown | null;
   producerOnboardingComplete: boolean;
   producerPaymentPreference: 'direct' | 'stripe' | null;
+  hasStripeConnectAccount: boolean;
   address?: {
     line1: string;
     city: string;
