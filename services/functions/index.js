@@ -86,6 +86,67 @@ async function getUserOrThrow(uid) {
   return snap.data();
 }
 
+async function syncStripeSubscriptionRecord(subscription, eventType) {
+  const subscriptionId = subscription?.id || null;
+  const customerId =
+    typeof subscription?.customer === "string"
+      ? subscription.customer
+      : subscription?.customer?.id || null;
+  let uid = subscription?.metadata?.uid || null;
+
+  if (!uid && subscriptionId) {
+    const bySubscription = await db
+      .collection("users")
+      .where("subscription.stripeSubscriptionId", "==", subscriptionId)
+      .limit(1)
+      .get();
+    if (!bySubscription.empty) uid = bySubscription.docs[0].id;
+  }
+  if (!uid && customerId) {
+    const byCustomer = await db
+      .collection("users")
+      .where("stripeCustomerId", "==", customerId)
+      .limit(1)
+      .get();
+    if (!byCustomer.empty) uid = byCustomer.docs[0].id;
+  }
+  if (!uid) {
+    console.warn("[syncStripeSubscriptionRecord] No matching user", {
+      subscriptionId,
+      eventType,
+    });
+    return;
+  }
+
+  const status =
+    eventType === "customer.subscription.deleted"
+      ? "canceled"
+      : String(subscription?.status || "inactive");
+  const currentPeriodEndSec = Number(subscription?.current_period_end || 0);
+  const canceledAtSec = Number(subscription?.canceled_at || 0);
+
+  await db.collection("users").doc(uid).set(
+    {
+      ...(customerId ? { stripeCustomerId: customerId } : {}),
+      subscription: {
+        status,
+        currentPeriodEnd: currentPeriodEndSec ? currentPeriodEndSec * 1000 : 0,
+        stripeSubscriptionId: subscriptionId,
+        cancelAtPeriodEnd: subscription?.cancel_at_period_end === true,
+        ...(status === "canceled"
+          ? {
+              canceledAt: canceledAtSec
+                ? canceledAtSec * 1000
+                : Date.now(),
+            }
+          : {}),
+      },
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
 function assertRole(user, allowedRoles) {
   if (!allowedRoles.includes(user.role)) {
     throw new HttpsError("permission-denied", "Insufficient role");
@@ -974,6 +1035,14 @@ exports.stripeWebhook = require("firebase-functions/v2/https").onRequest(
 
       const alreadyProcessed = await withStripeEventIdempotency(event, async () => {
         const type = event.type;
+
+        if (
+          type === "customer.subscription.updated" ||
+          type === "customer.subscription.deleted"
+        ) {
+          await syncStripeSubscriptionRecord(event.data.object, type);
+          return;
+        }
 
         if (type === "checkout.session.completed") {
           const session = event.data.object;
