@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsProduct(data) {
+      return data.producerUid == request.auth.uid
+        || data.producerId == request.auth.uid
+        || data.ownerId == request.auth.uid;
+    }
+
+    function acceptedCurrentProducerTerms() {
+      let profile = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return signedIn()
+        && profile.role == "producer"
+        && profile.producerTerms.accepted == true
+        && profile.producerTerms.version == "2026-07-25"
+        && profile.producerOnboarding.completed == true
+        && profile.subscription.status in ["active", "trialing", "paid"];
+    }
+
+    // Products are visible to signed-in members. Producer terms and setup are
+    // enforced before a producer may create or change a listing.
+    match /products/{productId} {
+      allow read: if signedIn();
+      allow create: if acceptedCurrentProducerTerms()
+        && ownsProduct(request.resource.data);
+      allow update: if acceptedCurrentProducerTerms()
+        && ownsProduct(resource.data)
+        && ownsProduct(request.resource.data);
+      allow delete: if signedIn() && ownsProduct(resource.data);
+    }
+
+    // Members may maintain their own profile and accept legal terms, but only
+    // trusted Cloud Functions may alter subscription and Stripe account fields.
+    match /users/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && !request.resource.data.keys().hasAny([
+          "subscription",
+          "stripeCustomerId",
+          "stripeConnectAccountId",
+          "stripeAccountId"
+        ]);
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          "subscription",
+          "stripeCustomerId",
+          "stripeConnectAccountId",
+          "stripeAccountId"
+        ]);
+    }
+
+    // Farm profiles are marketplace information. Only the owning producer writes.
+    match /farms/{farmId} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == farmId;
+    }
+
+    // Carts: own cart only
+    match /carts/{cartId} {
+      allow read, write: if signedIn() && request.auth.uid == cartId;
+    }
+
+    // Buyers may only read their own server-created orders.
+    match /orders/{orderId} {
+      allow read: if signedIn() && resource.data.buyerId == request.auth.uid;
+      allow write: if false;
+    }
+
+    // Producer orders subcollection: producer can read/update their own
+    match /producerOrders/{producerId}/orders/{orderId} {
+      allow read, write: if signedIn() && request.auth.uid == producerId;
+    }
+  }
+}

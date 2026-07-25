@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Maine Farm Market</string>
+    <string name="title_activity_main">Maine Farm Market</string>
+    <string name="package_name">com.mainefarmmarket.app</string>
+    <string name="custom_url_scheme">com.mainefarmmarket.app</string>
+</resources>

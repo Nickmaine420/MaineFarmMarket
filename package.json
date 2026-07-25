@@ -1,0 +1,18 @@
+{
+  "name": "maine-farm-market",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Maine Farm Market web, mobile, shared contracts, and Firebase backend.",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "web:dev": "npm --prefix apps/web run dev",
+    "web:build": "npm --prefix apps/web run build",
+    "web:preview": "npm --prefix apps/web run preview",
+    "mobile:sync": "npm --prefix apps/web run mobile:sync",
+    "mobile:bundle": "npm run mobile:sync && cd apps/mobile/android && gradlew.bat bundleRelease",
+    "functions:serve": "npm --prefix services/functions run serve",
+    "functions:deploy": "npm --prefix services/functions run deploy"
+  }
+}

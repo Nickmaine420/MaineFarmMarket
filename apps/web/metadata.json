@@ -1,0 +1,7 @@
+{
+  "name": "Maine Farm Market",
+  "description": "A high-trust, subscription-only marketplace connecting Maine producers and buyers. Maine residents only.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}

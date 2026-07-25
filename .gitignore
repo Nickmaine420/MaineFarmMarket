@@ -1,0 +1,38 @@
+# Dependencies and generated output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+.firebase/
+*.log
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Mobile build output
+.expo/
+apps/mobile/ios/
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/android/**/build/
+apps/mobile/android/captures/
+apps/mobile/keystore.properties
+apps/mobile/*.jks
+apps/mobile/*.keystore
+
+# Local archives and recovery material
+backups/
+archive/logs/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

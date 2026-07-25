@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "275379861196",
+    "project_id": "mainefarmmarket",
+    "storage_bucket": "mainefarmmarket.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:275379861196:android:52532d7cdfc236f9013469",
+        "android_client_info": {
+          "package_name": "com.mainefarmmarket.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "275379861196-kqm0vifi9tvbotuammvv0khpaca1th74.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.mainefarmmarket.app",
+            "certificate_hash": "94d054d4ade7ee184ebefa50d9dd9a3bea1d8429"
+          }
+        },
+        {
+          "client_id": "275379861196-n5242jqmkgksdmr71qj13eq0t22bomi1.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAEz6EZ4aBlP312w-ijZ6dZYyiJ8-URsrA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "275379861196-n5242jqmkgksdmr71qj13eq0t22bomi1.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
