@@ -53,6 +53,32 @@ service cloud.firestore {
           "stripeConnectAccountId",
           "stripeAccountId"
         ]);
+
+      match /blocked/{blockedUserId} {
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow create, update: if signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.blockedUserId == blockedUserId
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() <= 120;
+        allow delete: if signedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // Signed-in members may submit safety reports. Reports are intentionally
+    // write-only to clients and are reviewed through trusted administrative tools.
+    match /reports/{reportId} {
+      allow create: if signedIn()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.type == "listing"
+        && request.resource.data.listingId is string
+        && request.resource.data.listingId.size() > 0
+        && request.resource.data.reportedUserId is string
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && request.resource.data.reason.size() <= 1000
+        && request.resource.data.status == "open";
+      allow read, update, delete: if false;
     }
 
     // Farm profiles are marketplace information. Only the owning producer writes.

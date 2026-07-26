@@ -2,6 +2,7 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
+const { createHash } = require("node:crypto");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -78,6 +79,19 @@ function getStripe() {
   return new Stripe(stripeKey, { apiVersion: "2024-06-20" });
 }
 
+function accountDeletionRecordId(uid) {
+  return createHash("sha256").update(uid).digest("hex");
+}
+
+async function accountDeletionIsPendingOrComplete(uid) {
+  const snapshot = await db
+    .collection("account_deletion_records")
+    .doc(accountDeletionRecordId(uid))
+    .get();
+  if (!snapshot.exists) return false;
+  return ["pending", "completed"].includes(snapshot.get("status"));
+}
+
 async function getUserOrThrow(uid) {
   const snap = await db.collection("users").doc(uid).get();
   if (!snap.exists) {
@@ -115,6 +129,10 @@ async function syncStripeSubscriptionRecord(subscription, eventType) {
       subscriptionId,
       eventType,
     });
+    return;
+  }
+  if (await accountDeletionIsPendingOrComplete(uid)) {
+    console.info("[syncStripeSubscriptionRecord] Ignoring deleted account", { uid });
     return;
   }
 
@@ -852,6 +870,165 @@ exports.createCartCheckoutSessionV2 = onCall(
   }
 );
 
+async function deleteMatchingDocuments(query) {
+  while (true) {
+    const snapshot = await query.limit(400).get();
+    if (snapshot.empty) return;
+    const batch = db.batch();
+    snapshot.docs.forEach((document) => batch.delete(document.ref));
+    await batch.commit();
+    if (snapshot.size < 400) return;
+  }
+}
+
+async function anonymizeMatchingDocuments(query) {
+  while (true) {
+    const snapshot = await query.limit(400).get();
+    if (snapshot.empty) return;
+    const batch = db.batch();
+    snapshot.docs.forEach((document) => {
+      batch.update(document.ref, {
+        buyerId: FieldValue.delete(),
+        buyerUid: FieldValue.delete(),
+        buyerName: "Deleted user",
+        buyerEmail: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+    await batch.commit();
+    if (snapshot.size < 400) return;
+  }
+}
+
+// Permanently removes a signed-in account while retaining only transaction,
+// safety, tax, and legal records that may still be required.
+exports.deleteMyAccount = onCall(
+  { secrets: [STRIPE_SECRET_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+
+    const userRef = db.collection("users").doc(uid);
+    const userSnapshot = await userRef.get();
+    const user = userSnapshot.exists ? userSnapshot.data() || {} : {};
+    const deletionRecordRef = db
+      .collection("account_deletion_records")
+      .doc(accountDeletionRecordId(uid));
+
+    try {
+      await deletionRecordRef.set(
+        {
+          requestedAt: FieldValue.serverTimestamp(),
+          status: "pending",
+          role: user.role || null,
+          retentionPolicy: "transaction-safety-tax-legal-up-to-7-years",
+        },
+        { merge: true }
+      );
+
+      if (user.stripeCustomerId) {
+        const stripe = getStripe();
+        const subscriptions = await stripe.subscriptions.list({
+          customer: user.stripeCustomerId,
+          status: "all",
+          limit: 100,
+        });
+        for (const subscription of subscriptions.data) {
+          if (!["canceled", "incomplete_expired"].includes(subscription.status)) {
+            await stripe.subscriptions.cancel(subscription.id);
+          }
+        }
+      }
+
+      await Promise.all([
+        anonymizeMatchingDocuments(
+          db.collection("orders").where("buyerId", "==", uid)
+        ),
+        anonymizeMatchingDocuments(
+          db.collectionGroup("orders").where("buyerId", "==", uid)
+        ),
+        deleteMatchingDocuments(
+          db.collection("products").where("producerUid", "==", uid)
+        ),
+        deleteMatchingDocuments(
+          db.collection("products").where("producerId", "==", uid)
+        ),
+        deleteMatchingDocuments(
+          db.collectionGroup("blocked").where("blockedUserId", "==", uid)
+        ),
+      ]);
+
+      const reportSnapshot = await db
+        .collection("reports")
+        .where("reporterId", "==", uid)
+        .get();
+      if (!reportSnapshot.empty) {
+        const reportBatch = db.batch();
+        reportSnapshot.docs.forEach((report) => {
+          reportBatch.update(report.ref, {
+            reporterId: FieldValue.delete(),
+            reporterDeleted: true,
+          });
+        });
+        await reportBatch.commit();
+      }
+
+      await Promise.all([
+        db.collection("carts").doc(uid).delete(),
+        db.collection("farms").doc(uid).delete(),
+        admin
+          .storage()
+          .bucket()
+          .deleteFiles({ prefix: `products/${uid}/` })
+          .catch((error) => {
+            console.warn("Could not remove all listing images during account deletion", {
+              uid,
+              message: error?.message || String(error),
+            });
+          }),
+      ]);
+
+      await db.recursiveDelete(userRef);
+
+      await deletionRecordRef.set(
+        {
+          deletedAt: FieldValue.serverTimestamp(),
+          status: "completed",
+          role: user.role || null,
+          subscriptionCanceled: Boolean(user.stripeCustomerId),
+          retentionPolicy: "transaction-safety-tax-legal-up-to-7-years",
+        },
+        { merge: true }
+      );
+
+      try {
+        await admin.auth().deleteUser(uid);
+      } catch (error) {
+        if (error?.code !== "auth/user-not-found") throw error;
+      }
+
+      return { deleted: true };
+    } catch (error) {
+      console.error("deleteMyAccount error:", { uid, error });
+      await deletionRecordRef
+        .set(
+          {
+            status: "failed",
+            failedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+        .catch(() => undefined);
+      throw error instanceof HttpsError
+        ? error
+        : new HttpsError(
+            "internal",
+            "Account deletion could not be completed. Please try again or contact support."
+          );
+    }
+  }
+);
+
 // ---------------------------
 // createPortalSession (kept as-is)
 // ---------------------------
@@ -1233,6 +1410,10 @@ exports.stripeWebhook = require("firebase-functions/v2/https").onRequest(
 
           // ✅ 1) SUBSCRIPTION CHECKOUT HANDLING (NEW)
           if (uid && metaType.includes("subscription")) {
+            if (await accountDeletionIsPendingOrComplete(uid)) {
+              console.info("Ignoring subscription checkout for deleted account", { uid });
+              return;
+            }
             const subId = session.subscription;
 
             let stripeSub = null;

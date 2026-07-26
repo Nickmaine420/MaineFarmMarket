@@ -13,6 +13,7 @@ import UserAgreementPage from './pages/UserAgreementPage';
 import CartPage from './pages/CartPage';
 import BuyerOrdersPage from "./pages/BuyerOrdersPage";
 import ContactPage from "./pages/ContactPage";
+import AccountPage from "./pages/AccountPage";
 
 import { auth, db, functions } from './firebase';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithPopup, signOut } from 'firebase/auth';
@@ -355,16 +356,28 @@ const Header = () => {
           <img src="/mfm-logo.png" alt="Maine Farm Market" className="h-20 md:h-24 object-contain" />
         </Link>
 
-        <div className="w-full flex justify-between items-center mt-2">
-          <Link to="/contact" className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
-            Contact
-          </Link>
+        <div className="w-full flex justify-between items-center gap-3 mt-2">
+          <div className="flex items-center gap-3">
+            <Link to="/contact" className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
+              Contact
+            </Link>
+            <a href="/privacy.html" className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
+              Privacy
+            </a>
+          </div>
 
           {user ? (
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center justify-end gap-3">
               <span className="text-sm font-medium text-stone-700">
                 {user.displayName || user.email}
               </span>
+
+              <Link
+                to="/account"
+                className="text-sm font-bold text-emerald-700 hover:text-emerald-800"
+              >
+                Account
+              </Link>
 
               {user.role === UserRole.PRODUCER && (
                 <Link
@@ -397,6 +410,14 @@ export default function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/contact" element={<ContactPage />} />
+          <Route
+            path="/account"
+            element={
+              <ProtectedRoute>
+                <AccountPage />
+              </ProtectedRoute>
+            }
+          />
 
           {/* NEW: Auto-checkout gate replaces SubscriptionPage */}
           <Route

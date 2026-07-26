@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { auth, db, functions } from "../firebase";
-import { httpsCallable } from "firebase/functions";
+import { auth, db } from "../firebase";
 import {
+  addDoc,
   collection,
   doc,
   getDoc,
@@ -119,6 +119,7 @@ export default function BuyerDashboard() {
   const [farms, setFarms] = useState<Record<string, AnyDoc>>({});
   const [buyerLoc, setBuyerLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [locBusy, setLocBusy] = useState(false);
+  const [blockedProducerIds, setBlockedProducerIds] = useState<Set<string>>(new Set());
 
   // ✅ Firestore-synced cart
   const [cart, setCart] = useState<CartState>({ items: [] });
@@ -145,6 +146,28 @@ export default function BuyerDashboard() {
       fs.docs.forEach((d) => (fMap[d.id] = { id: d.id, ...d.data() }));
       setFarms(fMap);
     })();
+  }, []);
+
+  useEffect(() => {
+    let unsubscribeBlocked: null | (() => void) = null;
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      unsubscribeBlocked?.();
+      unsubscribeBlocked = null;
+      if (!user) {
+        setBlockedProducerIds(new Set());
+        return;
+      }
+      unsubscribeBlocked = onSnapshot(
+        collection(db, "users", user.uid, "blocked"),
+        (snapshot) => {
+          setBlockedProducerIds(new Set(snapshot.docs.map((blockedDoc) => blockedDoc.id)));
+        }
+      );
+    });
+    return () => {
+      unsubscribeBlocked?.();
+      unsubscribeAuth();
+    };
   }, []);
 
   // ✅ Listen to Firestore cart in real time (drives bottom bar)
@@ -218,15 +241,20 @@ export default function BuyerDashboard() {
 
   const enrichedProducts = useMemo(() => {
     const producerIdKey = (p: AnyDoc) => p.producerUid || p.producerId;
-    const list = products.map((p) => {
-      const pid = producerIdKey(p);
-      const farm = pid ? farms[pid] : null;
-      const miles =
-        buyerLoc && farm?.lat != null && farm?.lng != null
-          ? haversineMiles(buyerLoc.lat, buyerLoc.lng, Number(farm.lat), Number(farm.lng))
-          : null;
-      return { product: p, farm, miles };
-    });
+    const list = products
+      .filter((p) => {
+        const producerId = String(producerIdKey(p) || "");
+        return !producerId || !blockedProducerIds.has(producerId);
+      })
+      .map((p) => {
+        const pid = producerIdKey(p);
+        const farm = pid ? farms[pid] : null;
+        const miles =
+          buyerLoc && farm?.lat != null && farm?.lng != null
+            ? haversineMiles(buyerLoc.lat, buyerLoc.lng, Number(farm.lat), Number(farm.lng))
+            : null;
+        return { product: p, farm, miles };
+      });
 
     list.sort((a, b) => {
       if (a.miles == null && b.miles == null) return 0;
@@ -236,7 +264,7 @@ export default function BuyerDashboard() {
     });
 
     return list;
-  }, [products, farms, buyerLoc]);
+  }, [products, farms, buyerLoc, blockedProducerIds]);
 
   const cartCount = useMemo(() => {
     return cart.items.reduce((s, i) => s + Number(i.qty || 0), 0);
@@ -314,6 +342,58 @@ export default function BuyerDashboard() {
     clearLocalCartKeys();
   }
 
+  async function reportListing(product: AnyDoc) {
+    const user = auth.currentUser;
+    if (!user) return alert("Please sign in first.");
+    const reason = window.prompt(
+      "Why are you reporting this listing? Do not include passwords or payment-card information."
+    );
+    if (!reason?.trim()) return;
+
+    try {
+      await addDoc(collection(db, "reports"), {
+        reporterId: user.uid,
+        type: "listing",
+        listingId: String(product.id),
+        reportedUserId: String(product.producerUid || product.producerId || ""),
+        reason: reason.trim().slice(0, 1000),
+        status: "open",
+        createdAt: serverTimestamp(),
+      });
+      alert("Report received. Thank you for helping keep the marketplace safe.");
+    } catch (error) {
+      console.error("Listing report failed:", error);
+      alert("We could not submit the report. Please try again or contact support.");
+    }
+  }
+
+  async function blockProducer(product: AnyDoc, farm: AnyDoc | null) {
+    const user = auth.currentUser;
+    if (!user) return alert("Please sign in first.");
+    const producerId = String(product.producerUid || product.producerId || "");
+    if (!producerId) return alert("This producer cannot be blocked right now.");
+    const displayName =
+      farm?.farmName || farm?.name || product.producerName || "this producer";
+    if (
+      !window.confirm(
+        `Block ${displayName}? Their listings will be hidden. You can unblock them from Account and safety.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await setDoc(doc(db, "users", user.uid, "blocked", producerId), {
+        blockedUserId: producerId,
+        displayName: String(displayName).slice(0, 120),
+        createdAt: serverTimestamp(),
+      });
+    } catch (error) {
+      console.error("Producer block failed:", error);
+      alert("We could not block this producer. Please try again.");
+    }
+  }
+
   async function requestLocation() {
     setLocBusy(true);
     try {
@@ -338,26 +418,6 @@ export default function BuyerDashboard() {
     setBuyerLoc(null);
     localStorage.removeItem(BUYER_LOC_KEY);
   }
-
-  const [portalLoading, setPortalLoading] = useState(false);
-  const openBillingPortal = async () => {
-    try {
-      setPortalLoading(true);
-      const createPortalSession = httpsCallable<Record<string, never>, { url: string }>(
-        functions,
-        "createPortalSession"
-      );
-      const result = await createPortalSession({});
-      const url = result?.data?.url;
-      if (url) window.location.href = url;
-      else alert("Could not open subscription management.");
-    } catch (e: any) {
-      console.error(e);
-      alert(e?.message ?? "Could not open subscription management.");
-    } finally {
-      setPortalLoading(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#efe1b6]">
@@ -392,18 +452,10 @@ export default function BuyerDashboard() {
             </button>
 
             <button
-              onClick={() => navigate("/orders")}
+              onClick={() => navigate("/buyer/orders")}
               className="bg-white px-4 py-2 rounded-full font-bold border border-stone-200"
             >
               My Orders
-            </button>
-
-            <button
-              onClick={openBillingPortal}
-              disabled={portalLoading}
-              className="bg-white px-4 py-2 rounded-full font-bold border border-stone-200"
-            >
-              {portalLoading ? "Opening…" : "Cancel Subscription"}
             </button>
 
             <button
@@ -487,6 +539,22 @@ export default function BuyerDashboard() {
                 >
                   Add to Cart
                 </button>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => reportListing(product)}
+                    className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900"
+                  >
+                    Report listing
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => blockProducer(product, farm)}
+                    className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm font-bold text-stone-800"
+                  >
+                    Block producer
+                  </button>
+                </div>
               </div>
             </div>
           ))}

@@ -15,7 +15,7 @@ By using Maine Farm Market ("the platform"), you agree to the following terms:
 You must be located in Maine to buy or sell on the platform. You represent that the information you provide is accurate.
 
 2. Conduct
-You will use the platform only for lawful purposes. You will not harass other users, post false or misleading information, or misuse the marketplace.
+You will use the platform only for lawful purposes. You will not harass other users, post false or misleading information, or misuse the marketplace. Alcohol, tobacco, cannabis, firearms, ammunition, and all other age-restricted goods are strictly prohibited. You may report listings and block producers using the safety controls provided in the marketplace.
 
 3. Transactions
 Buyers and producers are responsible for their own transactions. The platform facilitates connections but is not a party to sales. Producers are responsible for product quality, fulfillment, and compliance with applicable laws.

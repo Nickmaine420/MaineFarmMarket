@@ -12,7 +12,7 @@ export const PRODUCER_TERMS_SECTIONS = [
   {
     heading: "Products and listings",
     body:
-      "You are responsible for ensuring that every item you list may legally be offered and sold in Maine. Listings must be accurate, current, and not misleading. You must disclose material safety, handling, storage, allergy, licensing, and fulfillment information that a reasonable buyer would need.",
+      "You are responsible for ensuring that every item you list may legally be offered and sold in Maine. Alcohol, tobacco, cannabis, firearms, ammunition, and all other age-restricted goods are strictly prohibited, regardless of whether they may otherwise be lawful. Listings must be accurate, current, and not misleading. You must disclose material safety, handling, storage, allergy, licensing, and fulfillment information that a reasonable buyer would need.",
   },
   {
     heading: "Food and product safety",
