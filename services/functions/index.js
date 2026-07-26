@@ -1,8 +1,10 @@
 /* eslint-disable */
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { createHash } = require("node:crypto");
+const { GoogleAuth } = require("google-auth-library");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -66,6 +68,11 @@ const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 // LIVE producer subscription price ID:
 const PRODUCER_PRICE_ID = "price_1T3Jap1SYqHEo1MCwtv3riOT";
 const PRODUCER_TERMS_VERSION = "2026-07-25";
+const GOOGLE_PLAY_PACKAGE_NAME = "com.mainefarmmarket.app";
+const GOOGLE_PLAY_PRODUCER_PRODUCT_ID = "producer_monthly";
+const googlePlayAuth = new GoogleAuth({
+  scopes: ["https://www.googleapis.com/auth/androidpublisher"],
+});
 
 // Safe APP_URL fallback (prevents deploy-time crashes)
 function getAppUrl() {
@@ -148,6 +155,7 @@ async function syncStripeSubscriptionRecord(subscription, eventType) {
       ...(customerId ? { stripeCustomerId: customerId } : {}),
       subscription: {
         status,
+        provider: "stripe",
         currentPeriodEnd: currentPeriodEndSec ? currentPeriodEndSec * 1000 : 0,
         stripeSubscriptionId: subscriptionId,
         cancelAtPeriodEnd: subscription?.cancel_at_period_end === true,
@@ -164,6 +172,306 @@ async function syncStripeSubscriptionRecord(subscription, eventType) {
     { merge: true }
   );
 }
+
+function googlePlayPurchaseRecordId(purchaseToken) {
+  return createHash("sha256").update(purchaseToken).digest("hex");
+}
+
+function googlePlayAccountId(uid) {
+  return createHash("sha256").update(uid).digest("hex");
+}
+
+async function googlePlayRequest(options) {
+  const client = await googlePlayAuth.getClient();
+  return client.request(options);
+}
+
+async function fetchGooglePlaySubscription(purchaseToken) {
+  const encodedToken = encodeURIComponent(purchaseToken);
+  const response = await googlePlayRequest({
+    method: "GET",
+    url:
+      "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/" +
+      `${GOOGLE_PLAY_PACKAGE_NAME}/purchases/subscriptionsv2/tokens/${encodedToken}`,
+  });
+  return response.data || {};
+}
+
+async function acknowledgeGooglePlaySubscription(purchaseToken, productId) {
+  const encodedToken = encodeURIComponent(purchaseToken);
+  const encodedProductId = encodeURIComponent(productId);
+  await googlePlayRequest({
+    method: "POST",
+    url:
+      "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/" +
+      `${GOOGLE_PLAY_PACKAGE_NAME}/purchases/subscriptions/${encodedProductId}/tokens/` +
+      `${encodedToken}:acknowledge`,
+    data: {},
+  });
+}
+
+async function cancelGooglePlaySubscription(purchaseToken) {
+  const encodedToken = encodeURIComponent(purchaseToken);
+  await googlePlayRequest({
+    method: "POST",
+    url:
+      "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/" +
+      `${GOOGLE_PLAY_PACKAGE_NAME}/purchases/subscriptionsv2/tokens/${encodedToken}:cancel`,
+    data: {
+      cancellationContext: {
+        cancellationType: "USER_REQUESTED_STOP_RENEWALS",
+      },
+    },
+  });
+}
+
+function googlePlaySubscriptionSummary(resource) {
+  const lineItems = Array.isArray(resource.lineItems) ? resource.lineItems : [];
+  const producerItems = lineItems.filter(
+    (item) => item?.productId === GOOGLE_PLAY_PRODUCER_PRODUCT_ID
+  );
+  if (!producerItems.length) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This Google Play purchase is not the Maine Farm Market producer subscription."
+    );
+  }
+
+  const currentPeriodEnd = Math.max(
+    ...producerItems.map((item) => Date.parse(item?.expiryTime || "") || 0)
+  );
+  const subscriptionState = String(
+    resource.subscriptionState || "SUBSCRIPTION_STATE_UNSPECIFIED"
+  );
+  const entitlementStates = new Set([
+    "SUBSCRIPTION_STATE_ACTIVE",
+    "SUBSCRIPTION_STATE_IN_GRACE_PERIOD",
+    "SUBSCRIPTION_STATE_CANCELED",
+  ]);
+  const active =
+    currentPeriodEnd > Date.now() && entitlementStates.has(subscriptionState);
+
+  return {
+    active,
+    status: active ? "active" : "inactive",
+    subscriptionState,
+    currentPeriodEnd,
+    autoRenewing: producerItems.some(
+      (item) => item?.autoRenewingPlan?.autoRenewEnabled === true
+    ),
+    basePlanId: producerItems[0]?.offerDetails?.basePlanId || null,
+    latestOrderId:
+      producerItems[0]?.latestSuccessfulOrderId || resource.latestOrderId || null,
+    acknowledgementState: resource.acknowledgementState || null,
+    testPurchase: Boolean(resource.testPurchase),
+  };
+}
+
+async function syncGooglePlaySubscriptionForUser(uid, purchaseToken) {
+  if (
+    typeof purchaseToken !== "string" ||
+    purchaseToken.length < 10 ||
+    purchaseToken.length > 4096
+  ) {
+    throw new HttpsError("invalid-argument", "A valid Google Play purchase token is required.");
+  }
+
+  const resource = await fetchGooglePlaySubscription(purchaseToken);
+  const summary = googlePlaySubscriptionSummary(resource);
+  const expectedAccountId = googlePlayAccountId(uid);
+  const purchaseAccountId =
+    resource.externalAccountIdentifiers?.obfuscatedExternalAccountId ||
+    resource.outOfAppPurchaseContext?.expiredExternalAccountIdentifiers
+      ?.obfuscatedExternalAccountId ||
+    null;
+  if (purchaseAccountId !== expectedAccountId) {
+    throw new HttpsError(
+      "permission-denied",
+      "This Google Play purchase belongs to a different Maine Farm Market account."
+    );
+  }
+
+  const purchaseRecordId = googlePlayPurchaseRecordId(purchaseToken);
+  const purchaseRef = db.collection("google_play_purchases").doc(purchaseRecordId);
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(purchaseRef);
+    if (existing.exists && existing.get("uid") !== uid) {
+      throw new HttpsError(
+        "permission-denied",
+        "This Google Play purchase is already linked to another account."
+      );
+    }
+    transaction.set(
+      purchaseRef,
+      {
+        uid,
+        provider: "google_play",
+        packageName: GOOGLE_PLAY_PACKAGE_NAME,
+        productId: GOOGLE_PLAY_PRODUCER_PRODUCT_ID,
+        purchaseToken,
+        purchaseTokenHash: purchaseRecordId,
+        ...summary,
+        updatedAt: FieldValue.serverTimestamp(),
+        ...(existing.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+      },
+      { merge: true }
+    );
+  });
+
+  if (
+    summary.active &&
+    summary.acknowledgementState === "ACKNOWLEDGEMENT_STATE_PENDING"
+  ) {
+    await acknowledgeGooglePlaySubscription(
+      purchaseToken,
+      GOOGLE_PLAY_PRODUCER_PRODUCT_ID
+    );
+    await purchaseRef.set(
+      {
+        acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+        acknowledgedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
+  const userRef = db.collection("users").doc(uid);
+  await db.runTransaction(async (transaction) => {
+    const userSnapshot = await transaction.get(userRef);
+    if (!userSnapshot.exists) {
+      throw new HttpsError("failed-precondition", "User profile missing");
+    }
+    const currentSubscription = userSnapshot.get("subscription") || {};
+    if (
+      !summary.active &&
+      !(
+        currentSubscription.provider === "google_play" &&
+        currentSubscription.purchaseTokenHash === purchaseRecordId
+      )
+    ) {
+      return;
+    }
+    transaction.set(
+      userRef,
+      {
+        subscription: {
+          status: summary.status,
+          provider: "google_play",
+          productId: GOOGLE_PLAY_PRODUCER_PRODUCT_ID,
+          purchaseTokenHash: purchaseRecordId,
+          currentPeriodEnd: summary.currentPeriodEnd,
+          autoRenewing: summary.autoRenewing,
+          subscriptionState: summary.subscriptionState,
+          basePlanId: summary.basePlanId,
+          latestOrderId: summary.latestOrderId,
+        },
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  });
+
+  return summary;
+}
+
+exports.verifyGooglePlaySubscription = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+
+  const user = await getUserOrThrow(uid);
+  assertRole(user, ["producer"]);
+  if (
+    user.producerTerms?.accepted !== true ||
+    user.producerTerms?.version !== PRODUCER_TERMS_VERSION ||
+    user.producerOnboarding?.completed !== true
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Accept the current producer terms and finish setup before subscribing."
+    );
+  }
+
+  try {
+    return await syncGooglePlaySubscriptionForUser(
+      uid,
+      request.data?.purchaseToken
+    );
+  } catch (error) {
+    console.error("verifyGooglePlaySubscription error:", {
+      uid,
+      message: error?.message || String(error),
+      status: error?.response?.status || null,
+    });
+    throw error instanceof HttpsError
+      ? error
+      : new HttpsError(
+          "failed-precondition",
+          "Google Play could not verify this subscription. Please try again."
+        );
+  }
+});
+
+exports.refreshGooglePlaySubscription = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+
+  const user = await getUserOrThrow(uid);
+  if (
+    user.subscription?.provider !== "google_play" ||
+    !user.subscription?.purchaseTokenHash
+  ) {
+    return { active: false, status: "none" };
+  }
+  const purchaseSnapshot = await db
+    .collection("google_play_purchases")
+    .doc(user.subscription.purchaseTokenHash)
+    .get();
+  if (!purchaseSnapshot.exists || purchaseSnapshot.get("uid") !== uid) {
+    return { active: false, status: "none" };
+  }
+
+  try {
+    return await syncGooglePlaySubscriptionForUser(
+      uid,
+      purchaseSnapshot.get("purchaseToken")
+    );
+  } catch (error) {
+    console.error("refreshGooglePlaySubscription error:", {
+      uid,
+      message: error?.message || String(error),
+      status: error?.response?.status || null,
+    });
+    throw new HttpsError(
+      "unavailable",
+      "Google Play could not refresh this subscription. Please try again."
+    );
+  }
+});
+
+exports.refreshGooglePlaySubscriptions = onSchedule(
+  {
+    schedule: "every 6 hours",
+    timeZone: "America/New_York",
+    timeoutSeconds: 540,
+  },
+  async () => {
+    const snapshot = await db.collection("google_play_purchases").get();
+    for (const purchase of snapshot.docs) {
+      const data = purchase.data();
+      if (!data.uid || !data.purchaseToken || data.accountDeleted === true) continue;
+      try {
+        await syncGooglePlaySubscriptionForUser(data.uid, data.purchaseToken);
+      } catch (error) {
+        console.error("Scheduled Google Play subscription refresh failed:", {
+          purchaseTokenHash: purchase.id,
+          uid: data.uid,
+          message: error?.message || String(error),
+          status: error?.response?.status || null,
+        });
+      }
+    }
+  }
+);
 
 function assertRole(user, allowedRoles) {
   if (!allowedRoles.includes(user.role)) {
@@ -911,6 +1219,7 @@ exports.deleteMyAccount = onCall(
     const userRef = db.collection("users").doc(uid);
     const userSnapshot = await userRef.get();
     const user = userSnapshot.exists ? userSnapshot.data() || {} : {};
+    let googlePlaySubscriptionCanceled = false;
     const deletionRecordRef = db
       .collection("account_deletion_records")
       .doc(accountDeletionRecordId(uid));
@@ -937,6 +1246,29 @@ exports.deleteMyAccount = onCall(
           if (!["canceled", "incomplete_expired"].includes(subscription.status)) {
             await stripe.subscriptions.cancel(subscription.id);
           }
+        }
+      }
+
+      if (
+        user.subscription?.provider === "google_play" &&
+        user.subscription?.purchaseTokenHash
+      ) {
+        const purchaseRef = db
+          .collection("google_play_purchases")
+          .doc(user.subscription.purchaseTokenHash);
+        const purchaseSnapshot = await purchaseRef.get();
+        const purchaseToken = purchaseSnapshot.get("purchaseToken");
+        if (purchaseSnapshot.exists && purchaseToken) {
+          await cancelGooglePlaySubscription(purchaseToken);
+          googlePlaySubscriptionCanceled = true;
+          await purchaseRef.set(
+            {
+              accountDeleted: true,
+              canceledForAccountDeletionAt: FieldValue.serverTimestamp(),
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
         }
       }
 
@@ -995,7 +1327,8 @@ exports.deleteMyAccount = onCall(
           deletedAt: FieldValue.serverTimestamp(),
           status: "completed",
           role: user.role || null,
-          subscriptionCanceled: Boolean(user.stripeCustomerId),
+          subscriptionCanceled:
+            Boolean(user.stripeCustomerId) || googlePlaySubscriptionCanceled,
           retentionPolicy: "transaction-safety-tax-legal-up-to-7-years",
         },
         { merge: true }

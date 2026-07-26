@@ -27,7 +27,7 @@ export const PRODUCER_TERMS_SECTIONS = [
   {
     heading: "Fulfillment and payment",
     body:
-      "You are responsible for honoring accepted orders and clearly communicating pickup, delivery, cancellation, refund, and payment arrangements. Stripe Connect is optional for producer sales. If you do not enable Stripe payouts, you and the buyer are responsible for agreeing on an appropriate direct payment method. Your separate producer selling subscription may still be billed through Stripe; buyers do not pay an access subscription.",
+      "You are responsible for honoring accepted orders and clearly communicating pickup, delivery, cancellation, refund, and payment arrangements. Stripe Connect is optional for producer sales. If you do not enable Stripe payouts, you and the buyer are responsible for agreeing on an appropriate direct payment method. Your separate producer selling subscription is billed through Stripe on the website or through Google Play when purchased in the Android app; buyers do not pay an access subscription.",
   },
   {
     heading: "Enforcement",

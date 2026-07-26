@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../App';
 import NewListingPage from './NewListingPage';
 import FarmProfilePage from './FarmProfilePage';
@@ -14,6 +15,11 @@ import {
   updateDoc,
   serverTimestamp,
 } from 'firebase/firestore';
+import { isNativeAndroidApp } from '../utils/platform';
+import {
+  GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
+  PlayBilling,
+} from '../services/playBilling';
 
 type Product = {
   id: string;
@@ -210,6 +216,12 @@ const ProducerDashboard = () => {
   const openBillingPortal = async () => {
     try {
       setPortalLoading(true);
+      if (isNativeAndroidApp()) {
+        await PlayBilling.openSubscriptionManagement({
+          productId: GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
+        });
+        return;
+      }
       const createPortalSession = httpsCallable<Record<string, never>, { url: string }>(
         functions,
         'createPortalSession'
@@ -282,8 +294,14 @@ const ProducerDashboard = () => {
             disabled={portalLoading}
             className="bg-stone-200 text-stone-800 px-6 py-3 rounded-xl font-bold hover:bg-stone-300 transition disabled:opacity-60"
           >
-            {portalLoading ? 'Opening…' : 'Cancel Subscription'}
+            {portalLoading ? 'Opening…' : 'Manage Subscription'}
           </button>
+          <Link
+            to="/buyer"
+            className="bg-stone-200 text-stone-800 px-6 py-3 rounded-xl font-bold hover:bg-stone-300 transition"
+          >
+            Shop Marketplace
+          </Link>
           <button
             onClick={logout}
             className="bg-stone-200 text-stone-800 px-6 py-3 rounded-xl font-bold hover:bg-stone-300 transition"

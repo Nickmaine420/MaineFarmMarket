@@ -53,8 +53,9 @@ npm run mobile:sync
 npm run mobile:bundle
 ```
 
-Buyer access and ordering are free. Producers obtain or manage their Stripe-billed
-selling subscription outside the Android app and sign in to use producer features.
+Buyer access and ordering are free. Producer subscriptions use Google Play Billing in
+the Android app and Stripe on the website. Both providers write verified entitlement
+state through trusted Cloud Functions so the shared account works across both clients.
 Product orders may use optional Stripe Connect only when every producer in the cart
 has opted in and completed payout setup; otherwise buyers arrange payment directly
 with the producers.

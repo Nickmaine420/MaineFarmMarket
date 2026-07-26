@@ -18,5 +18,8 @@ Android build. Private upload keys, keystore passwords, service-account credenti
 Stripe secret keys, and webhook secrets must never be committed.
 
 Buyers use the Android marketplace without an access subscription. Producer
-subscription checkout is not launched inside the Android app; producers obtain or
-manage their selling subscription outside the app and then sign in.
+subscriptions use Google Play Billing in the Android app. The native billing bridge
+queries the Play product `producer_monthly`, sends purchase tokens to trusted Cloud
+Functions for Google Play Developer API verification and acknowledgement, and links
+users to Google Play subscription management. Website producer subscriptions continue
+to use Stripe.

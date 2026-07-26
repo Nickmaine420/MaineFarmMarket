@@ -19,6 +19,7 @@ export interface UserProfile {
   email: string | null;
   buyerProfileComplete: boolean;
   subscriptionStatus: SubscriptionStatus;
+  subscriptionProvider: 'stripe' | 'google_play' | 'review' | null;
   userAgreementAcceptedAt: unknown | null;
   producerTermsVersion: string | null;
   producerTermsAcceptedAt: unknown | null;
@@ -34,6 +35,7 @@ export interface UserProfile {
   subscription?: {
     status: SubscriptionStatus;
     currentPeriodEnd: number;
+    provider?: 'stripe' | 'google_play' | 'review';
   };
 }
 

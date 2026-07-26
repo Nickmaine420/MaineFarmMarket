@@ -23,6 +23,13 @@ import { Capacitor } from '@capacitor/core';
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import { PRODUCER_TERMS_VERSION } from '@mfm/shared';
 import { isNativeAndroidApp } from './utils/platform';
+import {
+  GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
+  obfuscatePlayAccountId,
+  PlayBilling,
+  PlayPurchase,
+  PlaySubscriptionDetails,
+} from './services/playBilling';
 
 // --- Auth Context ---
 type AuthContextType = {
@@ -80,6 +87,7 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
         subscriptionStatus: normalizeSubscriptionStatus(
           data.subscription?.status ?? data.subscriptionStatus
         ),
+        subscriptionProvider: data.subscription?.provider ?? null,
         userAgreementAcceptedAt:
           data.userAgreementAcceptedAt ??
           data.acceptedUserAgreementAt ??
@@ -101,6 +109,7 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       role: fallbackRole,
       buyerProfileComplete: false,
       subscriptionStatus: SubscriptionStatus.NONE,
+      subscriptionProvider: null,
       userAgreementAcceptedAt: null,
       producerTermsVersion: null,
       producerTermsAcceptedAt: null,
@@ -193,11 +202,59 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 
 // --- Subscription Gate (auto-routes based on subscription state) ---
 const StartSubscription: React.FC = () => {
-  const { user, loading } = useAuth();
+  const { user, loading, refreshProfile } = useAuth();
   const navigate = useNavigate();
   const ranRef = useRef(false);
   const [nativeSubscriptionRequired, setNativeSubscriptionRequired] = useState(false);
+  const [nativeSubscription, setNativeSubscription] =
+    useState<PlaySubscriptionDetails | null>(null);
+  const [nativeLoading, setNativeLoading] = useState(false);
+  const [nativePurchaseLoading, setNativePurchaseLoading] = useState(false);
+  const [nativeMessage, setNativeMessage] = useState("");
   const [checkoutError, setCheckoutError] = useState("");
+
+  const verifyNativePurchase = async (purchase: PlayPurchase) => {
+    if (purchase.purchaseState === 2) {
+      setNativeMessage(
+        "Google Play is still processing this purchase. Access will begin after payment is confirmed."
+      );
+      return false;
+    }
+    if (purchase.purchaseState !== 1) return false;
+
+    const verifyGooglePlaySubscription = httpsCallable<
+      { purchaseToken: string },
+      { active: boolean; status: string }
+    >(functions, "verifyGooglePlaySubscription");
+    const result = await verifyGooglePlaySubscription({
+      purchaseToken: purchase.purchaseToken,
+    });
+    await refreshProfile();
+    return result.data.active === true;
+  };
+
+  const restoreNativeSubscription = async () => {
+    const result = await PlayBilling.querySubscriptions();
+    const purchase = result.purchases.find((candidate) =>
+      candidate.productIds.includes(GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID)
+    );
+    if (purchase && (await verifyNativePurchase(purchase))) {
+      navigate("/producer", { replace: true });
+      return true;
+    }
+
+    const refreshGooglePlaySubscription = httpsCallable<
+      Record<string, never>,
+      { active: boolean; status: string }
+    >(functions, "refreshGooglePlaySubscription");
+    const refreshed = await refreshGooglePlaySubscription({});
+    if (refreshed.data.active) {
+      await refreshProfile();
+      navigate("/producer", { replace: true });
+      return true;
+    }
+    return false;
+  };
 
   useEffect(() => {
     if (loading || ranRef.current) return;
@@ -245,6 +302,21 @@ const StartSubscription: React.FC = () => {
 
       if (isNativeAndroidApp()) {
         setNativeSubscriptionRequired(true);
+        setNativeLoading(true);
+        try {
+          if (await restoreNativeSubscription()) return;
+          const details = await PlayBilling.getSubscription({
+            productId: GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
+          });
+          setNativeSubscription(details);
+        } catch (error: any) {
+          console.error("Google Play subscription check failed:", error);
+          setCheckoutError(
+            error?.message || "Google Play could not check the subscription."
+          );
+        } finally {
+          setNativeLoading(false);
+        }
         return;
       }
 
@@ -261,20 +333,134 @@ const StartSubscription: React.FC = () => {
     };
 
     void run();
-  }, [user, loading, navigate]);
+  }, [user, loading, navigate, refreshProfile]);
+
+  const purchaseNativeSubscription = async () => {
+    if (!user || nativePurchaseLoading) return;
+    setCheckoutError("");
+    setNativeMessage("");
+    setNativePurchaseLoading(true);
+    try {
+      const purchase = await PlayBilling.purchaseSubscription({
+        productId: GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
+        obfuscatedAccountId: await obfuscatePlayAccountId(user.uid),
+      });
+      if (await verifyNativePurchase(purchase)) {
+        navigate("/producer", { replace: true });
+      }
+    } catch (error: any) {
+      if (error?.code !== "PLAY_BILLING_CANCELED") {
+        console.error("Google Play purchase failed:", error);
+        setCheckoutError(
+          error?.message || "Google Play could not complete the subscription."
+        );
+      }
+    } finally {
+      setNativePurchaseLoading(false);
+    }
+  };
+
+  const manuallyRestoreNativeSubscription = async () => {
+    if (nativePurchaseLoading) return;
+    setCheckoutError("");
+    setNativeMessage("");
+    setNativePurchaseLoading(true);
+    try {
+      if (!(await restoreNativeSubscription())) {
+        setNativeMessage(
+          "No active Maine Farm Market producer subscription was found on this Google Play account."
+        );
+      }
+    } catch (error: any) {
+      console.error("Google Play restore failed:", error);
+      setCheckoutError(
+        error?.message || "Google Play could not restore the subscription."
+      );
+    } finally {
+      setNativePurchaseLoading(false);
+    }
+  };
 
   if (nativeSubscriptionRequired) {
     return (
       <main className="min-h-[70vh] bg-[#efe1b6] p-6">
-        <section className="mx-auto max-w-xl rounded-2xl bg-white p-7 text-center shadow-lg">
-          <h1 className="text-2xl font-bold text-stone-900">Subscription required</h1>
+        <section className="mx-auto max-w-xl rounded-2xl bg-white p-7 shadow-lg">
+          <h1 className="text-center text-2xl font-bold text-stone-900">
+            Producer selling subscription
+          </h1>
           <p className="mt-3 text-stone-700">
-            Producers need an active Maine Farm Market selling subscription.
-            Producer enrollment and billing are managed outside the Android app.
+            A subscription is required to publish and manage products as a producer.
+            Buyer access and ordering remain free.
           </p>
-          <p className="mt-3 text-sm text-stone-600">
-            After your account is activated, return here and sign in again.
-          </p>
+          {nativeLoading ? (
+            <p className="mt-6 text-center font-semibold text-stone-700">
+              Checking Google Play…
+            </p>
+          ) : (
+            <>
+              <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                <p className="font-bold text-emerald-950">
+                  Maine Farm Market Producer
+                </p>
+                <p className="mt-1 text-xl font-extrabold text-emerald-900">
+                  {nativeSubscription?.formattedPrice
+                    ? `${nativeSubscription.formattedPrice} per month`
+                    : "Monthly price shown by Google Play"}
+                </p>
+                <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-stone-700">
+                  <li>Create and manage marketplace listings.</li>
+                  <li>Receive and manage buyer orders.</li>
+                  <li>Maintain your public farm or producer profile.</li>
+                </ul>
+              </div>
+
+              <p className="mt-4 text-sm leading-6 text-stone-600">
+                Payment is charged to your Google Play account when you confirm.
+                This monthly subscription automatically renews unless canceled.
+                You can cancel at any time in Google Play subscription settings;
+                cancellation normally takes effect at the end of the paid period.
+              </p>
+
+              {checkoutError && (
+                <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-800">
+                  {checkoutError}
+                </p>
+              )}
+              {nativeMessage && (
+                <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+                  {nativeMessage}
+                </p>
+              )}
+
+              <button
+                type="button"
+                onClick={purchaseNativeSubscription}
+                disabled={
+                  nativePurchaseLoading || nativeSubscription?.available !== true
+                }
+                className="mt-5 w-full rounded-xl bg-emerald-800 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {nativePurchaseLoading
+                  ? "Contacting Google Play…"
+                  : "Subscribe with Google Play"}
+              </button>
+              <button
+                type="button"
+                onClick={manuallyRestoreNativeSubscription}
+                disabled={nativePurchaseLoading}
+                className="mt-3 w-full rounded-xl bg-stone-100 px-5 py-3 font-bold text-stone-800 disabled:opacity-50"
+              >
+                Restore subscription
+              </button>
+
+              {nativeSubscription?.available === false && (
+                <p className="mt-3 text-center text-sm text-stone-600">
+                  This subscription is not available from Google Play yet. Please
+                  try again later.
+                </p>
+              )}
+            </>
+          )}
         </section>
       </main>
     );
