@@ -158,34 +158,53 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
   const login = async (role?: UserRole) => {
     if (role) sessionStorage.setItem("mfm_intent_role", role);
-    if (isFirebaseEmulatorMode) {
-      const email =
-        role === UserRole.PRODUCER
-          ? "producer-test@mainefarmmarket.local"
-          : "buyer-test@mainefarmmarket.local";
-      await signInWithEmailAndPassword(auth, email, "MfmEmulatorTest2026!");
-      return;
+    setLoading(true);
+    try {
+      let firebaseUser;
+      if (isFirebaseEmulatorMode) {
+        const email =
+          role === UserRole.PRODUCER
+            ? "producer-test@mainefarmmarket.local"
+            : "buyer-test@mainefarmmarket.local";
+        const result = await signInWithEmailAndPassword(
+          auth,
+          email,
+          "MfmEmulatorTest2026!"
+        );
+        firebaseUser = result.user;
+      } else if (Capacitor.isNativePlatform()) {
+        const result = await FirebaseAuthentication.signInWithGoogle({
+          skipNativeAuth: true,
+          // The Credential Manager path can fail before showing the account
+          // chooser on some Play-installed Samsung builds. Use the plugin's
+          // Google Play Services flow, which is supported across our Android
+          // device range and still returns the ID token needed by Firebase JS.
+          useCredentialManager: false,
+        });
+        const idToken = result.credential?.idToken;
+        if (!idToken) throw new Error("Google Sign-In did not return an ID token.");
+        const credential = GoogleAuthProvider.credential(
+          idToken,
+          result.credential?.accessToken
+        );
+        const resultCredential = await signInWithCredential(auth, credential);
+        firebaseUser = resultCredential.user;
+      } else {
+        const provider = new GoogleAuthProvider();
+        const result = await signInWithPopup(auth, provider);
+        firebaseUser = result.user;
+      }
+
+      // Route only after the newly authenticated user's Firestore profile is
+      // ready, avoiding a first-login loading screen race.
+      const profile = await createOrLoadUserProfile(firebaseUser);
+      setUser(profile);
+    } catch (error) {
+      setUser(null);
+      throw error;
+    } finally {
+      setLoading(false);
     }
-    if (Capacitor.isNativePlatform()) {
-      const result = await FirebaseAuthentication.signInWithGoogle({
-        skipNativeAuth: true,
-        // The Credential Manager path can fail before showing the account
-        // chooser on some Play-installed Samsung builds. Use the plugin's
-        // Google Play Services flow, which is supported across our Android
-        // device range and still returns the ID token needed by Firebase JS.
-        useCredentialManager: false,
-      });
-      const idToken = result.credential?.idToken;
-      if (!idToken) throw new Error("Google Sign-In did not return an ID token.");
-      const credential = GoogleAuthProvider.credential(
-        idToken,
-        result.credential?.accessToken
-      );
-      await signInWithCredential(auth, credential);
-      return;
-    }
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
   };
 
   const logout = async () => {

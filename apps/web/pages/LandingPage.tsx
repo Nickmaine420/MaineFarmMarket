@@ -9,10 +9,13 @@ const LandingPage = () => {
   const { login, user } = useAuth();
   const navigate = useNavigate();
   const [signInError, setSignInError] = useState("");
+  const [signingInRole, setSigningInRole] = useState<UserRole | null>(null);
 
   const handleStart = async (role: UserRole) => {
+    if (signingInRole) return;
     try {
       setSignInError("");
+      setSigningInRole(role);
       // Save intent BEFORE login so after auth we know which plan to charge
       sessionStorage.setItem('mfm_intent_role', role);
 
@@ -24,6 +27,8 @@ const LandingPage = () => {
     } catch (e) {
       console.error(e);
       setSignInError(getGoogleSignInErrorMessage(e));
+    } finally {
+      setSigningInRole(null);
     }
   };
 
@@ -51,16 +56,22 @@ const LandingPage = () => {
           <div className="flex flex-col md:flex-row items-center justify-center gap-4">
             <button
               onClick={() => handleStart(UserRole.BUYER)}
-              className="w-full md:w-auto px-8 py-4 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold text-lg transition shadow-lg"
+              disabled={signingInRole !== null}
+              className="w-full md:w-auto px-8 py-4 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold text-lg transition shadow-lg disabled:cursor-wait disabled:opacity-70"
             >
-              Shop the Market — Free
+              {signingInRole === UserRole.BUYER
+                ? "Preparing your account…"
+                : "Shop the Market — Free"}
             </button>
 
             <button
               onClick={() => handleStart(UserRole.PRODUCER)}
-              className="w-full md:w-auto px-8 py-4 bg-white hover:bg-stone-100 text-stone-900 rounded-lg font-bold text-lg transition shadow-lg"
+              disabled={signingInRole !== null}
+              className="w-full md:w-auto px-8 py-4 bg-white hover:bg-stone-100 text-stone-900 rounded-lg font-bold text-lg transition shadow-lg disabled:cursor-wait disabled:opacity-70"
             >
-              Start Selling (${PRICING.PRODUCER}/mo)
+              {signingInRole === UserRole.PRODUCER
+                ? "Preparing your account…"
+                : `Start Selling ($${PRICING.PRODUCER}/mo)`}
             </button>
           </div>
           {signInError && (
