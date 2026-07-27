@@ -3,6 +3,7 @@ import { useNavigate, Navigate } from '../router';
 import { useAuth } from '../App';
 import { UserRole } from '../types';
 import { PRICING } from '../constants';
+import { getGoogleSignInErrorMessage } from '../utils/authErrors';
 
 const LandingPage = () => {
   const { login, user } = useAuth();
@@ -22,7 +23,7 @@ const LandingPage = () => {
       navigate('/start-subscription', { replace: true });
     } catch (e) {
       console.error(e);
-      setSignInError("Google sign-in was blocked or cancelled. Please try again.");
+      setSignInError(getGoogleSignInErrorMessage(e));
     }
   };
 

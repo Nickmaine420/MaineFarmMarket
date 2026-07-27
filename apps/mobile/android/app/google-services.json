@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "275379861196-mskp2rumra86vs1ddip1bh763doabivo.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.mainefarmmarket.app",
+            "certificate_hash": "e0c6e6fcf1317efa855a963a1a4c5ef2e7bf1bc3"
+          }
+        },
+        {
           "client_id": "275379861196-n5242jqmkgksdmr71qj13eq0t22bomi1.apps.googleusercontent.com",
           "client_type": 3
         }

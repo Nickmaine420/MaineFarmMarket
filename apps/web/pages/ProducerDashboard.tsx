@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from '../router';
 import { useAuth } from '../App';
 import NewListingPage from './NewListingPage';
 import FarmProfilePage from './FarmProfilePage';
@@ -16,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { isNativeAndroidApp } from '../utils/platform';
 import {
+  googlePlaySubscriptionManagementUrl,
   GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
   PlayBilling,
 } from '../services/playBilling';
@@ -286,12 +286,27 @@ const ProducerDashboard = () => {
   const openBillingPortal = async () => {
     try {
       setPortalLoading(true);
-      if (isNativeAndroidApp()) {
-        await PlayBilling.openSubscriptionManagement({
-          productId: GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
+      if (user.subscriptionProvider === "google_play") {
+        if (isNativeAndroidApp()) {
+          await PlayBilling.openSubscriptionManagement({
+            productId: GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
+          });
+        } else {
+          window.location.assign(googlePlaySubscriptionManagementUrl());
+        }
+        return;
+      }
+      if (user.subscriptionProvider === "review") {
+        setNotice({
+          tone: "info",
+          message:
+            "This account has review access and does not have a paid subscription to manage.",
         });
         return;
       }
+
+      // Stripe is also the safest fallback for older website subscriptions that
+      // predate the provider field.
       const createPortalSession = httpsCallable<Record<string, never>, { url: string }>(
         functions,
         'createPortalSession'
@@ -410,12 +425,6 @@ const ProducerDashboard = () => {
           >
             {portalLoading ? 'Opening…' : 'Manage Subscription'}
           </button>
-          <Link
-            to="/buyer"
-            className="bg-stone-200 text-stone-800 px-6 py-3 rounded-xl font-bold hover:bg-stone-300 transition"
-          >
-            Shop Marketplace
-          </Link>
           <button
             onClick={logout}
             className="bg-stone-200 text-stone-800 px-6 py-3 rounded-xl font-bold hover:bg-stone-300 transition"

@@ -1,6 +1,15 @@
 import { registerPlugin } from "@capacitor/core";
 
 export const GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID = "producer_monthly";
+export const GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID = "monthly";
+export const GOOGLE_PLAY_PACKAGE_NAME = "com.mainefarmmarket.app";
+
+export function googlePlaySubscriptionManagementUrl(): string {
+  const url = new URL("https://play.google.com/store/account/subscriptions");
+  url.searchParams.set("package", GOOGLE_PLAY_PACKAGE_NAME);
+  url.searchParams.set("sku", GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID);
+  return url.toString();
+}
 
 export type PlaySubscriptionDetails = {
   available: boolean;

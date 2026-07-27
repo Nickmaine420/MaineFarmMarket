@@ -589,8 +589,8 @@ const SubscribeCancel: React.FC = () => {
       <p className="text-stone-700 mt-2">
         No worries — you can try again any time.
       </p>
-      <Link to="/onboarding" className="inline-block mt-4 text-emerald-700 font-bold hover:text-emerald-800">
-        Go back
+      <Link to="/start-subscription" className="inline-block mt-4 text-emerald-700 font-bold hover:text-emerald-800">
+        Try checkout again
       </Link>
     </div>
   );

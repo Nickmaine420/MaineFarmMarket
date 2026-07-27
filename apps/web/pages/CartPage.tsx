@@ -690,31 +690,37 @@ export default function CartPage() {
             )}
 
             <div className="mt-3">
-              <div className="text-sm font-bold mb-1">
+              <label htmlFor="scheduled-date" className="block text-sm font-bold mb-1">
                 {deliveryMethod === "delivery" ? "Delivery" : "Pickup"} date <span className="text-red-600">*</span>
-              </div>
+              </label>
               <input
+                id="scheduled-date"
                 type="date"
                 className="w-full border rounded-lg px-3 py-2"
                 min={deliveryMethod === "pickup" ? minDate : minDateForDelivery}
                 value={scheduledDate}
                 onChange={(e) => setScheduledDate(e.target.value)}
+                aria-describedby={schedulingError ? "schedule-error" : undefined}
+                aria-invalid={Boolean(schedulingError)}
                 required
               />
             </div>
             <div className="mt-3">
-              <div className="text-sm font-bold mb-1">
+              <label htmlFor="scheduled-time" className="block text-sm font-bold mb-1">
                 {deliveryMethod === "delivery" ? "Delivery" : "Pickup"} time <span className="text-red-600">*</span>
-              </div>
+              </label>
               <input
+                id="scheduled-time"
                 type="time"
                 className="w-full border rounded-lg px-3 py-2"
                 value={scheduledTime}
                 onChange={(e) => setScheduledTime(e.target.value)}
+                aria-describedby={schedulingError ? "schedule-error" : undefined}
+                aria-invalid={Boolean(schedulingError)}
                 required
               />
               {schedulingError && (
-                <p className="mt-1 text-sm text-red-600" role="alert">
+                <p id="schedule-error" className="mt-1 text-sm text-red-600" role="alert">
                   {schedulingError}
                 </p>
               )}

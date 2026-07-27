@@ -86,7 +86,22 @@ public class PlayBillingPlugin extends Plugin implements PurchasesUpdatedListene
     private ProductDetails.SubscriptionOfferDetails selectOffer(ProductDetails details) {
         List<ProductDetails.SubscriptionOfferDetails> offers =
             details.getSubscriptionOfferDetails();
-        return offers == null || offers.isEmpty() ? null : offers.get(0);
+        if (offers == null || offers.isEmpty()) return null;
+
+        for (ProductDetails.SubscriptionOfferDetails offer : offers) {
+            if (
+                MarketplaceConfig.PRODUCER_BASE_PLAN_ID.equals(offer.getBasePlanId()) &&
+                offer.getOfferId() == null
+            ) {
+                return offer;
+            }
+        }
+        for (ProductDetails.SubscriptionOfferDetails offer : offers) {
+            if (MarketplaceConfig.PRODUCER_BASE_PLAN_ID.equals(offer.getBasePlanId())) {
+                return offer;
+            }
+        }
+        return null;
     }
 
     private JSObject productDetailsResult(ProductDetails details) {

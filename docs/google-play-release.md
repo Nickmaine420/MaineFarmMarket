@@ -4,8 +4,8 @@
 
 - Application ID: `com.mainefarmmarket.app`
 - Firebase Android app ID: `1:275379861196:android:52532d7cdfc236f9013469`
-- Version name: `1.0`
-- Version code: `1`
+- Version name: `1.3`
+- Version code: `4`
 - Target SDK: 36
 
 ## Build
@@ -28,16 +28,19 @@ certificate may be supplied to Google Play when requested.
 
 ## Subscription behavior
 
-Buyers access the marketplace and place orders without an access subscription. The
-Android app does not start producer Stripe subscription purchases. Producer
-subscription signup and management remain on the website.
+Buyers access the marketplace and place orders without an access subscription.
+Android producer subscriptions use Google Play product `producer_monthly` and base
+plan `monthly`. Website producer subscriptions continue to use Stripe. Subscription
+management follows the provider originally used by the producer.
 
 ## Before production rollout
 
 1. Upload the signed AAB to an internal testing track.
-2. Complete the Data safety, privacy policy, app access, content rating, and account
+2. Confirm both the upload-key and Play app-signing SHA-1/SHA-256 certificates are
+   registered on the Firebase Android app before testing Google sign-in.
+3. Complete the Data safety, privacy policy, app access, content rating, and account
    deletion declarations in Play Console.
-3. Add internal testers and verify Google sign-in, real-time data, direct-payment
+4. Add internal testers and verify Google sign-in, real-time data, direct-payment
    orders, optional Stripe product checkout, and producer order notifications.
-4. Verify the production Firebase Functions, Firestore rules, Hosting site, Stripe
+5. Verify the production Firebase Functions, Firestore rules, Hosting site, Stripe
    webhook, and Stripe Connect configuration are deployed from this repository.

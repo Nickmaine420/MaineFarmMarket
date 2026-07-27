@@ -9,6 +9,7 @@ public class ExampleUnitTest {
     @Test
     public void producerSubscriptionMatchesPlayConsoleProduct() {
         assertEquals("producer_monthly", MarketplaceConfig.PRODUCER_SUBSCRIPTION_ID);
+        assertEquals("monthly", MarketplaceConfig.PRODUCER_BASE_PLAN_ID);
         assertTrue(MarketplaceConfig.isConfiguredProducerSubscription("producer_monthly"));
         assertFalse(MarketplaceConfig.isConfiguredProducerSubscription("buyer_monthly"));
         assertFalse(MarketplaceConfig.isConfiguredProducerSubscription(null));

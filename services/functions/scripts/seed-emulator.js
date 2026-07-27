@@ -6,15 +6,17 @@ if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_
   );
 }
 
-process.env.GCLOUD_PROJECT ||= "maine-farm-market";
+process.env.GCLOUD_PROJECT ||= "mainefarmmarket";
 
-const admin = require("firebase-admin");
+const { initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const { getFirestore, Timestamp } = require("firebase-admin/firestore");
 
-admin.initializeApp({ projectId: process.env.GCLOUD_PROJECT });
+initializeApp({ projectId: process.env.GCLOUD_PROJECT });
 
-const db = admin.firestore();
-const auth = admin.auth();
-const now = admin.firestore.Timestamp.now();
+const db = getFirestore();
+const auth = getAuth();
+const now = Timestamp.now();
 const password = "MfmEmulatorTest2026!";
 
 async function upsertAuthUser({ uid, email, displayName }) {
@@ -29,6 +31,24 @@ async function upsertAuthUser({ uid, email, displayName }) {
 async function main() {
   const producerUid = "emulator-producer";
   const buyerUid = "emulator-buyer";
+  const testOrderId = "test-order-direct-001";
+  const scheduledAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  const testOrderItems = [
+    {
+      productId: "test-product-blueberries",
+      name: "TEST PRODUCT — Maine Blueberries",
+      title: "TEST PRODUCT — Maine Blueberries",
+      unit: "pint",
+      price: 5,
+      priceCents: 500,
+      qty: 1,
+      lineSubtotal: 500,
+      producerId: producerUid,
+      producerName: "Test Pine Farm",
+      producerTown: "Waterville, ME",
+      producerPhone: "207-555-0100",
+    },
+  ];
 
   await Promise.all([
     upsertAuthUser({
@@ -128,9 +148,76 @@ async function main() {
     testData: true,
     updatedAt: now,
   });
+  batch.set(db.collection("orders").doc(testOrderId), {
+    buyerId: buyerUid,
+    status: "awaiting_payment",
+    paymentMode: "direct",
+    paymentStatus: "arrange_with_producer",
+    producerStatuses: {
+      [producerUid]: { status: "awaiting_payment" },
+    },
+    inventoryReservationStatus: "committed",
+    itemsSnapshot: testOrderItems,
+    pricing: {
+      source: "emulator",
+      currency: "usd",
+      subtotalCents: 500,
+      processingFeeCents: 0,
+      totalCents: 500,
+      computedAt: now,
+    },
+    producers: [{ producerId: producerUid, subtotalCents: 500 }],
+    perProducer: {
+      [producerUid]: {
+        fulfillmentMethod: "pickup",
+        scheduledAt,
+        window: {
+          id: "emulator-test",
+          label: "Emulator test pickup",
+          timezone: "America/New_York",
+        },
+      },
+    },
+    deliveryMethod: "pickup",
+    scheduledAt,
+    notes: "Emulator-only order. Do not fulfill.",
+    testData: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  batch.set(
+    db
+      .collection("producerOrders")
+      .doc(producerUid)
+      .collection("orders")
+      .doc(testOrderId),
+    {
+      orderId: testOrderId,
+      buyerId: buyerUid,
+      buyerName: "Test Maine Buyer",
+      buyerEmail: "buyer-test@mainefarmmarket.local",
+      items: testOrderItems,
+      status: "awaiting_payment",
+      paymentMode: "direct",
+      paymentStatus: "arrange_with_buyer",
+      totalCents: 500,
+      fulfillment: {
+        method: "pickup",
+        fulfillmentMethod: "pickup",
+        scheduledAt,
+        notes: "Emulator-only order. Do not fulfill.",
+      },
+      scheduledAt,
+      notes: "Emulator-only order. Do not fulfill.",
+      testData: true,
+      createdAt: now,
+    }
+  );
 
   await batch.commit();
-  console.log("Seeded emulator buyer, producer, farm, and direct-payment test product.");
+  console.log(
+    "Seeded emulator buyer, producer, farm, listing, cart, and direct-payment order."
+  );
 }
 
 main().catch((error) => {
