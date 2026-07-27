@@ -10,7 +10,7 @@ import {
   where,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../router";
 
 function formatMoney(cents: number) {
   const n = Number(cents || 0) / 100;

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "../firebase";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../router";
 import { doc, onSnapshot, runTransaction, serverTimestamp, getDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 

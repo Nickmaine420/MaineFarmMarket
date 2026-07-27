@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "../router";
 import { deleteField, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { PRODUCER_TERMS_VERSION } from "@mfm/shared";
 import { useAuth } from "../App";

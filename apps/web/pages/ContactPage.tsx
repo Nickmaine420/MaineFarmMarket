@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "../router";
 
 const SUPPORT_EMAIL = "mainefarmmarket@gmail.com";
 const SUPPORT_PHONE_DISPLAY = "207-431-4518";

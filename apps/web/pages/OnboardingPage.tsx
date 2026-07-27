@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { auth, db } from "../firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../router";
 import { isMaineZip } from "../utils/validation";
 
 export default function OnboardingPage() {

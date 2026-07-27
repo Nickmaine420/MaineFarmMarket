@@ -19,12 +19,10 @@
     "@capacitor/core": "^8.4.2",
     "firebase": "^12.9.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "react-router-dom": "^7.13.0"
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@capacitor/android": "^8.4.2",
-    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.4.2",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",

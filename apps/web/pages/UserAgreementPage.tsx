@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../router";
 import { useAuth } from "../App";
 import { auth, db } from "../firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { Navigate } from "react-router-dom";
+import { Navigate } from "../router";
 import { hasAcceptedUserAgreement } from "../utils/agreements";
 
 const AGREEMENT_TEXT = `

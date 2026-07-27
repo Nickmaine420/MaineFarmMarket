@@ -19,7 +19,7 @@ export default defineConfig({
           output: {
             manualChunks: {
               firebase: ["firebase/app", "firebase/auth", "firebase/firestore", "firebase/functions", "firebase/storage"],
-              react: ["react", "react-dom", "react-router-dom"],
+              react: ["react", "react-dom"],
             },
           },
         },

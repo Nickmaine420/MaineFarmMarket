@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "../router";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { PRODUCER_TERMS_SECTIONS, PRODUCER_TERMS_TITLE, PRODUCER_TERMS_VERSION } from "@mfm/shared";
 import { useAuth } from "../App";

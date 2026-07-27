@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
+import { useNavigate, Navigate } from '../router';
 import { useAuth } from '../App';
 import { UserRole } from '../types';
 import { PRICING } from '../constants';

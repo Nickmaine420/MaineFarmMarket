@@ -1,5 +1,5 @@
 import React, { useState, createContext, useContext, useEffect, useRef } from 'react';
-import { HashRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate, useSearchParams } from './router';
 import { UserRole, UserProfile, SubscriptionStatus } from './types';
 
 import LandingPage from './pages/LandingPage';
