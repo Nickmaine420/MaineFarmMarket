@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "275379861196-9it23m4oi7l02caukqqjeki8a8lqvfv4.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.mainefarmmarket.app",
+            "certificate_hash": "ebace1b82fc58bf7d5c321c8f12036bb932ac06c"
+          }
+        },
+        {
           "client_id": "275379861196-kqm0vifi9tvbotuammvv0khpaca1th74.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
