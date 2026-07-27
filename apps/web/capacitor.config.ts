@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   appId: "com.mainefarmmarket.app",
   appName: "Maine Farm Market",
   webDir: "dist",
-  loggingBehavior: "debug",
+  loggingBehavior: "none",
   android: {
     path: "../mobile/android",
     backgroundColor: "#efe1b6",
@@ -21,4 +21,3 @@ const config: CapacitorConfig = {
 };
 
 export default config;
-

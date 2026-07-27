@@ -41,6 +41,7 @@ export default function UserAgreementPage() {
   const [agreed, setAgreed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [alreadyAccepted, setAlreadyAccepted] = useState<boolean | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -58,6 +59,7 @@ export default function UserAgreementPage() {
 
   const handleContinue = async () => {
     if (!agreed || !auth.currentUser?.uid) return;
+    setErrorMessage("");
     setSubmitting(true);
     try {
       const uid = auth.currentUser.uid;
@@ -75,7 +77,7 @@ export default function UserAgreementPage() {
       navigate("/start-subscription", { replace: true });
     } catch (e) {
       console.error("User agreement accept failed:", e);
-      alert("Could not save. Please try again.");
+      setErrorMessage("Could not save your agreement. Please try again.");
       setSubmitting(false);
     }
   };
@@ -85,6 +87,11 @@ export default function UserAgreementPage() {
       <div className="max-w-2xl w-full bg-white rounded-2xl shadow-lg p-6 flex flex-col max-h-[90vh]">
         <h1 className="text-2xl font-bold text-stone-800 mb-4">User Agreement</h1>
         <p className="text-sm text-stone-600 mb-4">Please read and accept the agreement below to continue.</p>
+        {errorMessage && (
+          <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-900">
+            {errorMessage}
+          </p>
+        )}
         <div className="flex-1 min-h-0 overflow-y-auto border border-stone-200 rounded-lg p-4 mb-6 bg-stone-50">
           <pre className="whitespace-pre-wrap font-sans text-sm text-stone-700">{AGREEMENT_TEXT}</pre>
         </div>

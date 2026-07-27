@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { startProducerStripeOnboarding } from "../lib/stripeConnectProducer";
+import { useState } from "react";
 
 export default function StripePayoutPage() {
   const location = useLocation();
@@ -8,12 +9,17 @@ export default function StripePayoutPage() {
   const isReturn = params.get("return") === "1";
   const isRefresh = params.get("refresh") === "1";
   const fromSetup = params.get("from") === "setup";
+  const [errorMessage, setErrorMessage] = useState("");
+  const [starting, setStarting] = useState(false);
 
   const start = async () => {
     try {
+      setErrorMessage("");
+      setStarting(true);
       await startProducerStripeOnboarding();
     } catch (error: any) {
-      alert(error?.message || "Stripe payout setup failed.");
+      setErrorMessage(error?.message || "Stripe payout setup failed.");
+      setStarting(false);
     }
   };
 
@@ -24,6 +30,11 @@ export default function StripePayoutPage() {
           Optional producer payments
         </div>
         <h1 className="mt-2 text-3xl font-bold text-stone-900">Stripe payout setup</h1>
+        {errorMessage && (
+          <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-red-900">
+            {errorMessage}
+          </p>
+        )}
 
         {isReturn ? (
           <p className="mt-4 text-stone-700">
@@ -47,9 +58,14 @@ export default function StripePayoutPage() {
           <button
             type="button"
             onClick={start}
+            disabled={starting}
             className="mt-6 w-full rounded-xl bg-emerald-700 px-5 py-3 font-bold text-white"
           >
-            {isRefresh ? "Restart optional Stripe setup" : "Set up Stripe payouts"}
+            {starting
+              ? "Opening Stripe…"
+              : isRefresh
+                ? "Restart optional Stripe setup"
+                : "Set up Stripe payouts"}
           </button>
         )}
         <button
@@ -67,4 +83,3 @@ export default function StripePayoutPage() {
     </main>
   );
 }
-

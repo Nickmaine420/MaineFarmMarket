@@ -15,6 +15,7 @@ build/
 **/.env
 **/.env.*
 !**/.env.example
+!apps/web/.env.emulator
 
 # Mobile build output
 .expo/

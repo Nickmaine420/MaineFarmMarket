@@ -5,6 +5,12 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const { createHash } = require("node:crypto");
 const { GoogleAuth } = require("google-auth-library");
+const {
+  assertProducerStatusTransition,
+  deriveBuyerOrderStatus,
+  normalizeRequestedItems,
+  validateScheduledAt,
+} = require("./marketplace");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -480,23 +486,54 @@ function assertRole(user, allowedRoles) {
 }
 
 async function resolveProductsAndPricing(itemsInput) {
-  if (!Array.isArray(itemsInput) || !itemsInput.length) {
-    throw new HttpsError("invalid-argument", "Cart is empty.");
+  let normalizedItems;
+  try {
+    normalizedItems = normalizeRequestedItems(itemsInput);
+  } catch (error) {
+    throw new HttpsError("invalid-argument", error.message);
   }
 
-  const productRefs = itemsInput.map((i) => db.collection("products").doc(String(i.productId)));
+  const productRefs = normalizedItems.map((i) =>
+    db.collection("products").doc(i.productId)
+  );
   const productSnaps = await db.getAll(...productRefs);
 
   let subtotalCents = 0;
-  const resolvedItems = itemsInput.map((item, idx) => {
+  const resolvedItems = normalizedItems.map((item, idx) => {
     const snap = productSnaps[idx];
     if (!snap.exists) {
-      throw new HttpsError("failed-precondition", "Product not found");
+      throw new HttpsError("failed-precondition", "A product in your cart is no longer available.");
     }
     const p = snap.data() || {};
-    const qty = Math.max(1, Number(item.qty || 1));
+    const qty = item.qty;
     const price = Number(p.price || 0);
     const priceCents = Math.round(price * 100);
+    const quantityAvailable = Number(p.quantityAvailable);
+    const producerId = (p.producerId || p.producerUid)
+      ? String(p.producerId || p.producerUid)
+      : "";
+    if (!producerId) {
+      throw new HttpsError(
+        "failed-precondition",
+        `${String(p.name || p.title || "This product")} is missing its producer.`
+      );
+    }
+    if (!Number.isInteger(priceCents) || priceCents <= 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        `${String(p.name || p.title || "This product")} has an invalid price.`
+      );
+    }
+    if (
+      p.inStock === false ||
+      !Number.isInteger(quantityAvailable) ||
+      quantityAvailable < qty
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        `${String(p.name || p.title || "This product")} does not have enough stock.`
+      );
+    }
     const lineSubtotal = priceCents * qty;
     subtotalCents += lineSubtotal;
     return {
@@ -506,7 +543,7 @@ async function resolveProductsAndPricing(itemsInput) {
       qty,
       priceCents,
       lineSubtotal,
-      producerId: (p.producerId || p.producerUid) ? String(p.producerId || p.producerUid) : "",
+      producerId,
       producerName: p.producerName ? String(p.producerName) : "",
       imageUrl: p.photoUrl || p.imageUrl || p.image || "",
     };
@@ -529,6 +566,39 @@ async function resolveProductsAndPricing(itemsInput) {
   }));
 
   return { resolvedItems, subtotalCents, processingFeeCents, totalCents, producers };
+}
+
+async function reserveInventoryInTransaction(tx, resolvedItems) {
+  const refs = resolvedItems.map((item) =>
+    db.collection("products").doc(item.productId)
+  );
+  const snapshots = [];
+  for (const ref of refs) snapshots.push(await tx.get(ref));
+
+  snapshots.forEach((snapshot, index) => {
+    const item = resolvedItems[index];
+    if (!snapshot.exists) {
+      throw new HttpsError("failed-precondition", `${item.name} is no longer available.`);
+    }
+    const product = snapshot.data() || {};
+    const available = Number(product.quantityAvailable);
+    if (
+      product.inStock === false ||
+      !Number.isInteger(available) ||
+      available < item.qty
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        `${item.name} does not have enough stock.`
+      );
+    }
+    const remaining = available - item.qty;
+    tx.update(snapshot.ref, {
+      quantityAvailable: remaining,
+      inStock: remaining > 0,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
 }
 
 function buildPerProducerSnapshot(producerIds, perProducerInput) {
@@ -563,7 +633,44 @@ function buildPerProducerSnapshot(producerIds, perProducerInput) {
   return perProducer;
 }
 
-async function getProducerPaymentRouting(stripe, producerIds) {
+async function validateProducerFulfillment(producerIds, perProducer, scheduledAtInput) {
+  const ids = [...producerIds];
+  const farmRefs = ids.map((id) => db.collection("farms").doc(id));
+  const farmSnapshots = await db.getAll(...farmRefs);
+  let canonicalScheduledAt = null;
+
+  ids.forEach((producerId, index) => {
+    const farm = farmSnapshots[index].exists ? farmSnapshots[index].data() || {} : {};
+    const method = perProducer[producerId]?.fulfillmentMethod || "pickup";
+    if (method === "delivery" && farm.deliveryAvailable !== true) {
+      throw new HttpsError(
+        "failed-precondition",
+        `${String(farm.farmName || "A producer")} does not offer delivery.`
+      );
+    }
+    if (method === "pickup" && farm.pickupAvailable === false) {
+      throw new HttpsError(
+        "failed-precondition",
+        `${String(farm.farmName || "A producer")} does not offer pickup.`
+      );
+    }
+    try {
+      canonicalScheduledAt = validateScheduledAt(scheduledAtInput, method);
+    } catch (error) {
+      throw new HttpsError("invalid-argument", error.message);
+    }
+    perProducer[producerId] = {
+      ...perProducer[producerId],
+      scheduledAt: canonicalScheduledAt,
+      fulfillmentNotes:
+        method === "delivery" ? String(farm.deliveryNotes || "").slice(0, 500) : "",
+    };
+  });
+
+  return { perProducer, scheduledAt: canonicalScheduledAt };
+}
+
+async function getProducerPaymentRouting(producerIds) {
   const ids = [...producerIds];
   const farmRefs = ids.map((id) => db.collection("farms").doc(id));
   const userRefs = ids.map((id) => db.collection("users").doc(id));
@@ -573,8 +680,9 @@ async function getProducerPaymentRouting(stripe, producerIds) {
   ]);
 
   const routing = {};
-  await Promise.all(
-    ids.map(async (producerId, index) => {
+  let stripe = null;
+  for (let index = 0; index < ids.length; index += 1) {
+      const producerId = ids[index];
       const farm = farmSnaps[index].exists ? farmSnaps[index].data() || {} : {};
       const user = userSnaps[index].exists ? userSnaps[index].data() || {} : {};
       const accountId = user.stripeConnectAccountId || user.stripeAccountId || "";
@@ -585,10 +693,11 @@ async function getProducerPaymentRouting(stripe, producerIds) {
 
       if (!optedIn) {
         routing[producerId] = { mode: "direct" };
-        return;
+        continue;
       }
 
       try {
+        stripe ||= getStripe();
         const account = await stripe.accounts.retrieve(accountId);
         const ready =
           account.details_submitted === true &&
@@ -604,8 +713,7 @@ async function getProducerPaymentRouting(stripe, producerIds) {
         });
         routing[producerId] = { mode: "direct" };
       }
-    })
-  );
+  }
 
   return routing;
 }
@@ -635,6 +743,14 @@ async function createDirectMarketplaceOrder({
       return { orderId: data.orderId, paymentMode: "direct" };
     }
 
+    await reserveInventoryInTransaction(tx, resolvedItems);
+    const producerStatuses = Object.fromEntries(
+      producers.map((producer) => [
+        producer.producerId,
+        { status: "awaiting_payment" },
+      ])
+    );
+
     tx.set(intentRef, {
       uid,
       orderId: orderRef.id,
@@ -646,6 +762,8 @@ async function createDirectMarketplaceOrder({
       status: "awaiting_payment",
       paymentMode: "direct",
       paymentStatus: "arrange_with_producer",
+      producerStatuses,
+      inventoryReservationStatus: "committed",
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       itemsSnapshot: resolvedItems,
@@ -710,6 +828,49 @@ async function createDirectMarketplaceOrder({
   });
 }
 
+async function releaseHeldOrderInventory(orderId, finalStatus = "cancelled") {
+  const orderRef = db.collection("orders").doc(orderId);
+  return db.runTransaction(async (tx) => {
+    const orderSnapshot = await tx.get(orderRef);
+    if (!orderSnapshot.exists) return false;
+    const order = orderSnapshot.data() || {};
+    if (order.inventoryReservationStatus !== "held") return false;
+
+    const items = Array.isArray(order.itemsSnapshot) ? order.itemsSnapshot : [];
+    const productRefs = items.map((item) =>
+      db.collection("products").doc(String(item.productId))
+    );
+    const productSnapshots = [];
+    for (const productRef of productRefs) {
+      productSnapshots.push(await tx.get(productRef));
+    }
+
+    productSnapshots.forEach((snapshot, index) => {
+      if (!snapshot.exists) return;
+      const item = items[index];
+      const current = Number(snapshot.get("quantityAvailable"));
+      const restored = (Number.isInteger(current) ? current : 0) + Number(item.qty || 0);
+      tx.update(snapshot.ref, {
+        quantityAvailable: restored,
+        inStock: restored > 0,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+    tx.set(
+      orderRef,
+      {
+        status: finalStatus,
+        paymentStatus: finalStatus === "expired" ? "expired" : "cancelled",
+        inventoryReservationStatus: "released",
+        inventoryReleasedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return true;
+  });
+}
+
 // ---------------------------
 // createCheckoutSession (producer subscriptions only)
 // NEW FLOW: always success -> /#/subscribe-success
@@ -719,8 +880,6 @@ exports.createCheckoutSession = onCall(
   { secrets: [STRIPE_SECRET_KEY] },
   async (request) => {
     try {
-      const stripe = getStripe();
-
       const uid = request.auth?.uid;
       if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
 
@@ -780,112 +939,19 @@ exports.createCheckoutSession = onCall(
 );
 
 // ---------------------------
-// ✅ createCartCheckoutSession (ONE-TIME cart order checkout)
-// This matches CartPage.tsx calling httpsCallable(functions, "createCartCheckoutSession")
+// Legacy checkout entrypoint retained only to give outdated clients a safe,
+// explicit upgrade error. All current clients use createCartCheckoutSessionV2.
 // ---------------------------
 exports.createCartCheckoutSession = onCall(
-  { secrets: [STRIPE_SECRET_KEY] },
+  {},
   async (request) => {
-    try {
-      const stripe = getStripe();
-
-      const uid = request.auth?.uid;
-      if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
-      const user = await getUserOrThrow(uid);
-      assertRole(user, ["buyer"]);
-
-      const data = request.data || {};
-      const items = Array.isArray(data.items) ? data.items : [];
-
-      if (!items.length) {
-        throw new HttpsError("invalid-argument", "Cart is empty.");
-      }
-
-      // Validate + compute total
-      let totalCents = 0;
-      const safeItems = items.map((it) => {
-        const name = String(it?.name || "Item");
-        const unit = String(it?.unit || "");
-        const qty = Math.max(1, Number(it?.qty || 1));
-        const priceCents = Math.max(0, Number(it?.priceCents || 0));
-        totalCents += qty * priceCents;
-
-        return {
-          id: String(it?.id || ""),
-          productId: String(it?.productId || it?.id || ""),
-          name,
-          unit,
-          qty,
-          priceCents,
-          producerId: String(it?.producerId || ""),
-          producerName: String(it?.producerName || ""),
-        };
-      });
-
-      const deliveryMethod = data.deliveryMethod === "delivery" ? "delivery" : "pickup";
-      const scheduledAt = data.scheduledAt ? String(data.scheduledAt) : null;
-      const notes = data.notes ? String(data.notes) : "";
-
-      // Create an order doc first (status pending)
-      const orderRef = db.collection("orders").doc();
-      const orderId = orderRef.id;
-
-      await orderRef.set(
-        {
-          buyerId: uid,
-          status: "pending",
-          createdAt: FieldValue.serverTimestamp(),
-          deliveryMethod,
-          scheduledAt,
-          notes,
-          totalCents,
-          items: safeItems,
-        },
-        { merge: true }
-      );
-
-      const appUrl = getAppUrl();
-
-      const successUrl = `${appUrl}/#/order-success?orderId=${orderId}`;
-      const cancelUrl = `${appUrl}/#/cart`;
-
-      const session = await stripe.checkout.sessions.create({
-        mode: "payment",
-        line_items: safeItems.map((it) => ({
-          price_data: {
-            currency: "usd",
-            product_data: {
-              name: it.unit ? `${it.name} (${it.unit})` : it.name,
-            },
-            unit_amount: it.priceCents,
-          },
-          quantity: it.qty,
-        })),
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-
-        // These are used by your stripeWebhook to find the order
-        metadata: {
-          orderId,
-          uid,
-          type: "order_checkout",
-        },
-        payment_intent_data: {
-          metadata: {
-            orderId,
-            uid,
-            type: "order_payment",
-          },
-        },
-      });
-
-      return { url: session.url, orderId };
-    } catch (e) {
-      console.error("createCartCheckoutSession error:", e);
-      throw e instanceof HttpsError
-        ? e
-        : new HttpsError("internal", e.message || "createCartCheckoutSession failed");
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "Please sign in first.");
     }
+    throw new HttpsError(
+      "failed-precondition",
+      "This retired checkout version is disabled. Refresh Maine Farm Market and try again."
+    );
   }
 );
 
@@ -896,8 +962,6 @@ exports.createCartCheckoutSessionV2 = onCall(
   { secrets: [STRIPE_SECRET_KEY] },
   async (request) => {
     try {
-      const stripe = getStripe();
-
       const uid = request.auth?.uid;
       if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
 
@@ -912,6 +976,16 @@ exports.createCartCheckoutSessionV2 = onCall(
 
       const user = await getUserOrThrow(uid);
       assertRole(user, ["buyer"]);
+      const acceptedBuyerAgreement =
+        user.userAgreementAcceptedAt ||
+        user.acceptedUserAgreementAt ||
+        user.acceptedUserAgreement === true;
+      if (!acceptedBuyerAgreement || user.buyerProfileComplete !== true) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Accept the buyer agreement and finish your Maine buyer profile before ordering."
+        );
+      }
 
       const cartRef = db.collection("carts").doc(uid);
       const cartSnap = await cartRef.get();
@@ -922,12 +996,7 @@ exports.createCartCheckoutSessionV2 = onCall(
           : 0;
 
       const { resolvedItems, subtotalCents, processingFeeCents, totalCents, producers } =
-        await resolveProductsAndPricing(
-          itemsInput.map((it) => ({
-            productId: it.productId || it.id,
-            qty: it.qty,
-          }))
-        );
+        await resolveProductsAndPricing(itemsInput);
 
       const producerIdsFromItems = new Set(
         resolvedItems.map((it) => (it.producerId ? it.producerId : "unknown"))
@@ -938,18 +1007,21 @@ exports.createCartCheckoutSessionV2 = onCall(
           "Every cart item must belong to a producer."
         );
       }
-      const perProducer = buildPerProducerSnapshot(
+      const perProducerDraft = buildPerProducerSnapshot(
         producerIdsFromItems,
         perProducerInput
       );
       const deliveryMethod =
         data.deliveryMethod === "delivery" ? "delivery" : "pickup";
-      const scheduledAt = String(data.scheduledAt || "").trim();
-      const notes = String(data.notes || "").trim().slice(0, 2000);
-      const paymentRouting = await getProducerPaymentRouting(
-        stripe,
-        producerIdsFromItems
+      const fulfillmentResult = await validateProducerFulfillment(
+        producerIdsFromItems,
+        perProducerDraft,
+        data.scheduledAt
       );
+      const perProducer = fulfillmentResult.perProducer;
+      const scheduledAt = fulfillmentResult.scheduledAt;
+      const notes = String(data.notes || "").trim().slice(0, 2000);
+      const paymentRouting = await getProducerPaymentRouting(producerIdsFromItems);
       const allProducersUseStripe = [...producerIdsFromItems].every(
         (producerId) => paymentRouting[producerId]?.mode === "stripe"
       );
@@ -969,6 +1041,7 @@ exports.createCartCheckoutSessionV2 = onCall(
         });
       }
 
+      const stripe = getStripe();
       const payoutDestinations = {};
       producerIdsFromItems.forEach((producerId) => {
         payoutDestinations[producerId] = paymentRouting[producerId].destination;
@@ -979,7 +1052,9 @@ exports.createCartCheckoutSessionV2 = onCall(
       const orderIntents = db.collection("order_intents");
       const orders = db.collection("orders");
       const nowMs = Date.now();
-      const TTL_MS = 10 * 60 * 1000;
+      // Stripe Checkout requires an expiry at least 30 minutes in the future.
+      const TTL_MS = 30 * 60 * 1000;
+      const RESERVATION_RELEASE_GRACE_MS = 15 * 60 * 1000;
 
       const transferGroupBase = "order";
 
@@ -1001,6 +1076,16 @@ exports.createCartCheckoutSessionV2 = onCall(
         const orderRef = orders.doc();
         const orderId = orderRef.id;
         const transferGroup = `${transferGroupBase}_${orderId}`;
+        const reservationExpiresAt = admin.firestore.Timestamp.fromMillis(
+          nowMs + TTL_MS + RESERVATION_RELEASE_GRACE_MS
+        );
+        await reserveInventoryInTransaction(tx, resolvedItems);
+        const producerStatuses = Object.fromEntries(
+          producers.map((producer) => [
+            producer.producerId,
+            { status: "pending_payment" },
+          ])
+        );
 
         tx.set(intentRef, {
           uid,
@@ -1027,8 +1112,9 @@ exports.createCartCheckoutSessionV2 = onCall(
           orderRef,
           {
             buyerId: uid,
-            status: "pending",
+            status: "pending_payment",
             createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
             itemsSnapshot: resolvedItems,
             pricing: {
               source: "server",
@@ -1042,6 +1128,10 @@ exports.createCartCheckoutSessionV2 = onCall(
             perProducer,
             transferGroup,
             paymentMode: "stripe",
+            paymentStatus: "pending",
+            producerStatuses,
+            inventoryReservationStatus: "held",
+            reservationExpiresAt,
             deliveryMethod,
             scheduledAt: scheduledAt || null,
             notes,
@@ -1069,6 +1159,7 @@ exports.createCartCheckoutSessionV2 = onCall(
           {
             mode: "payment",
             payment_method_types: ["card"],
+            expires_at: Math.floor((Date.now() + TTL_MS) / 1000),
             line_items: [
               ...resolvedItems.map((it) => ({
                 price_data: {
@@ -1114,6 +1205,7 @@ exports.createCartCheckoutSessionV2 = onCall(
           {
             mode: "payment",
             payment_method_types: ["card"],
+            expires_at: Math.floor((Date.now() + TTL_MS) / 1000),
             line_items: [
               ...resolvedItems.map((it) => ({
                 price_data: {
@@ -1174,6 +1266,146 @@ exports.createCartCheckoutSessionV2 = onCall(
       throw e instanceof HttpsError
         ? e
         : new HttpsError("internal", e.message || "createCartCheckoutSessionV2 failed");
+    }
+  }
+);
+
+exports.updateProducerOrderStatus = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+
+  const user = await getUserOrThrow(uid);
+  assertRole(user, ["producer"]);
+  const orderId = String(request.data?.orderId || "").trim();
+  const requestedStatus = String(request.data?.status || "").trim().toLowerCase();
+  if (!orderId || orderId.length > 128) {
+    throw new HttpsError("invalid-argument", "A valid order ID is required.");
+  }
+
+  const mainOrderRef = db.collection("orders").doc(orderId);
+  const producerOrderRef = db
+    .collection("producerOrders")
+    .doc(uid)
+    .collection("orders")
+    .doc(orderId);
+
+  try {
+    return await db.runTransaction(async (tx) => {
+      const [mainSnapshot, producerSnapshot] = await Promise.all([
+        tx.get(mainOrderRef),
+        tx.get(producerOrderRef),
+      ]);
+      if (!mainSnapshot.exists || !producerSnapshot.exists) {
+        throw new HttpsError("not-found", "Order not found.");
+      }
+
+      const mainOrder = mainSnapshot.data() || {};
+      const producerOrder = producerSnapshot.data() || {};
+      const producerIds = Array.isArray(mainOrder.producers)
+        ? mainOrder.producers.map((producer) => String(producer.producerId || ""))
+        : [];
+      if (!producerIds.includes(uid)) {
+        throw new HttpsError("permission-denied", "This order does not belong to you.");
+      }
+
+      let nextStatus;
+      try {
+        nextStatus = assertProducerStatusTransition(
+          producerOrder.status,
+          requestedStatus,
+          producerOrder.paymentMode || mainOrder.paymentMode
+        );
+      } catch (error) {
+        throw new HttpsError("failed-precondition", error.message);
+      }
+
+      const items =
+        nextStatus === "cancelled" && producerOrder.paymentMode === "direct"
+          ? Array.isArray(producerOrder.items)
+            ? producerOrder.items
+            : []
+          : [];
+      const productSnapshots = [];
+      for (const item of items) {
+        productSnapshots.push(
+          await tx.get(db.collection("products").doc(String(item.productId)))
+        );
+      }
+
+      if (nextStatus === "cancelled") {
+        productSnapshots.forEach((snapshot, index) => {
+          if (!snapshot.exists) return;
+          const current = Number(snapshot.get("quantityAvailable"));
+          const restored =
+            (Number.isInteger(current) ? current : 0) + Number(items[index].qty || 0);
+          tx.update(snapshot.ref, {
+            quantityAvailable: restored,
+            inStock: restored > 0,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        });
+      }
+
+      const producerStatuses = {
+        ...(mainOrder.producerStatuses || {}),
+        [uid]: {
+          status: nextStatus,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+      };
+      const buyerStatus = deriveBuyerOrderStatus(
+        producerIds,
+        producerStatuses,
+        mainOrder.status
+      );
+
+      tx.update(producerOrderRef, {
+        status: nextStatus,
+        ...(nextStatus === "cancelled"
+          ? { inventoryReleasedAt: FieldValue.serverTimestamp() }
+          : {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      tx.set(
+        mainOrderRef,
+        {
+          status: buyerStatus,
+          producerStatuses,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return { orderId, producerStatus: nextStatus, orderStatus: buyerStatus };
+    });
+  } catch (error) {
+    throw error instanceof HttpsError
+      ? error
+      : new HttpsError("internal", error.message || "Could not update order status.");
+  }
+});
+
+exports.releaseExpiredCheckoutReservations = onSchedule(
+  "every 15 minutes",
+  async () => {
+    const snapshot = await db
+      .collection("orders")
+      .where("inventoryReservationStatus", "==", "held")
+      .limit(200)
+      .get();
+    const nowMs = Date.now();
+    for (const document of snapshot.docs) {
+      const expiresAt = document.get("reservationExpiresAt");
+      const expiresAtMs = expiresAt?.toMillis ? expiresAt.toMillis() : 0;
+      if (expiresAtMs && expiresAtMs <= nowMs) {
+        try {
+          await releaseHeldOrderInventory(document.id, "expired");
+        } catch (error) {
+          console.error("Could not release expired inventory reservation", {
+            orderId: document.id,
+            message: error?.message || String(error),
+          });
+        }
+      }
     }
   }
 );
@@ -1554,6 +1786,15 @@ exports.stripeWebhook = require("firebase-functions/v2/https").onRequest(
           return;
         }
 
+        if (type === "checkout.session.expired") {
+          const session = event.data.object;
+          const metadata = session.metadata || {};
+          if (metadata.type === "order_checkout_v2" && metadata.orderId) {
+            await releaseHeldOrderInventory(metadata.orderId, "expired");
+          }
+          return;
+        }
+
         if (type === "checkout.session.completed") {
           const session = event.data.object;
 
@@ -1601,11 +1842,23 @@ exports.stripeWebhook = require("firebase-functions/v2/https").onRequest(
                   );
                   return;
                 }
+                const producerStatuses = Object.fromEntries(
+                  (Array.isArray(orderData.producers) ? orderData.producers : []).map(
+                    (producer) => [
+                      String(producer.producerId || ""),
+                      { status: "paid", updatedAt: FieldValue.serverTimestamp() },
+                    ]
+                  )
+                );
                 tx.set(
                   orderRef,
                   {
                     status: "paid",
+                    paymentStatus: "paid",
+                    producerStatuses,
+                    inventoryReservationStatus: "committed",
                     paidAt: FieldValue.serverTimestamp(),
+                    updatedAt: FieldValue.serverTimestamp(),
                     stripe: {
                       ...(orderData.stripe || {}),
                       paymentIntentId: session.payment_intent || null,

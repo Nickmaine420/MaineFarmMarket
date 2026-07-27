@@ -10,6 +10,7 @@ import {
   where,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { useNavigate } from "react-router-dom";
 
 function formatMoney(cents: number) {
   const n = Number(cents || 0) / 100;
@@ -67,6 +68,9 @@ type Order = {
   createdAt?: any;
   paidAt?: any;
   updatedAt?: any;
+  paymentMode?: "direct" | "stripe";
+  paymentStatus?: string;
+  producerStatuses?: Record<string, { status?: string }>;
 };
 
 type ProducerInfo = {
@@ -76,6 +80,7 @@ type ProducerInfo = {
 };
 
 export default function BuyerOrdersPage() {
+  const navigate = useNavigate();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -181,6 +186,9 @@ export default function BuyerOrdersPage() {
               createdAt: data.createdAt,
               paidAt: data.paidAt,
               updatedAt: data.updatedAt,
+              paymentMode: data.paymentMode,
+              paymentStatus: data.paymentStatus,
+              producerStatuses: data.producerStatuses || {},
             };
           });
 
@@ -285,7 +293,10 @@ export default function BuyerOrdersPage() {
   }
 
   function getScheduleDisplay(o: Order): string {
-    if (o.scheduledAt) return String(o.scheduledAt);
+    if (o.scheduledAt) {
+      const parsed = new Date(o.scheduledAt);
+      if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleString();
+    }
     const parts: string[] = [];
     if (o.pickupDate || o.deliveryDate) {
       parts.push(o.pickupDate || o.deliveryDate || "");
@@ -317,7 +328,16 @@ export default function BuyerOrdersPage() {
   return (
     <div className="min-h-screen bg-[#efe1b8] px-4 pb-24">
       <div className="max-w-4xl mx-auto pt-6">
-        <h1 className="text-2xl font-bold mb-4">Your Orders</h1>
+        <div className="mb-4 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => navigate("/buyer")}
+            className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-stone-50"
+          >
+            Back to market
+          </button>
+          <h1 className="text-2xl font-bold">Your Orders</h1>
+        </div>
 
         {loading && <div className="opacity-70">Loading…</div>}
 
@@ -325,10 +345,7 @@ export default function BuyerOrdersPage() {
           <div className="bg-white border rounded-xl p-3 text-sm">
             <div className="font-semibold mb-1">Orders couldn’t load</div>
             <div className="opacity-80">{errorMsg}</div>
-            <div className="opacity-70 mt-2">
-              If the message mentions “requires an index”, deploy the Firestore
-              index (step 2 below).
-            </div>
+            <div className="opacity-70 mt-2">Please try again in a moment.</div>
           </div>
         )}
 
@@ -362,6 +379,12 @@ export default function BuyerOrdersPage() {
                       ? ` • ${scheduleDisplay}`
                       : ""}
                   </div>
+                  {o.paymentMode === "direct" && (
+                    <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
+                      Payment is arranged directly with each producer. Confirm the
+                      amount and accepted payment method before pickup or delivery.
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-3 space-y-2">
@@ -420,6 +443,13 @@ export default function BuyerOrdersPage() {
                                 </>
                               ) : null}
                             </div>
+                            {it.producerId &&
+                              o.producerStatuses?.[it.producerId]?.status && (
+                              <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">
+                                Producer status:{" "}
+                                {o.producerStatuses[it.producerId].status?.replaceAll("_", " ")}
+                              </div>
+                            )}
                           </div>
                           <div className="font-semibold text-right">
                             {formatMoney(line)}

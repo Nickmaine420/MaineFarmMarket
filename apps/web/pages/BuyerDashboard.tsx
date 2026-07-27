@@ -6,12 +6,13 @@ import {
   collection,
   doc,
   getDoc,
-  getDocs,
   onSnapshot,
+  runTransaction,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { useAuth } from "../App";
 
 type AnyDoc = Record<string, any>;
 
@@ -114,9 +115,22 @@ function clearLocalCartKeys() {
 
 export default function BuyerDashboard() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
 
   const [products, setProducts] = useState<any[]>([]);
   const [farms, setFarms] = useState<Record<string, AnyDoc>>({});
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [marketError, setMarketError] = useState("");
+  const [search, setSearch] = useState("");
+  const [department, setDepartment] = useState("all");
+  const [fulfillmentFilter, setFulfillmentFilter] = useState("all");
+  const [notice, setNotice] = useState("");
+  const [reportTarget, setReportTarget] = useState<AnyDoc | null>(null);
+  const [reportReason, setReportReason] = useState("");
+  const [blockTarget, setBlockTarget] = useState<{
+    product: AnyDoc;
+    farm: AnyDoc | null;
+  } | null>(null);
   const [buyerLoc, setBuyerLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [locBusy, setLocBusy] = useState(false);
   const [blockedProducerIds, setBlockedProducerIds] = useState<Set<string>>(new Set());
@@ -136,16 +150,44 @@ export default function BuyerDashboard() {
   }, []);
 
   useEffect(() => {
-    (async () => {
-      const ps = await getDocs(collection(db, "products"));
-      const pList = ps.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setProducts(pList);
-
-      const fs = await getDocs(collection(db, "farms"));
-      const fMap: Record<string, AnyDoc> = {};
-      fs.docs.forEach((d) => (fMap[d.id] = { id: d.id, ...d.data() }));
-      setFarms(fMap);
-    })();
+    let productsReady = false;
+    let farmsReady = false;
+    const markReady = () => {
+      if (productsReady && farmsReady) setMarketLoading(false);
+    };
+    const fail = (error: unknown) => {
+      console.error("Marketplace subscription failed:", error);
+      setMarketError("The marketplace could not refresh. Check your connection and try again.");
+      setMarketLoading(false);
+    };
+    const unsubscribeProducts = onSnapshot(
+      collection(db, "products"),
+      (snapshot) => {
+        setProducts(snapshot.docs.map((product) => ({ id: product.id, ...product.data() })));
+        productsReady = true;
+        setMarketError("");
+        markReady();
+      },
+      fail
+    );
+    const unsubscribeFarms = onSnapshot(
+      collection(db, "farms"),
+      (snapshot) => {
+        const next: Record<string, AnyDoc> = {};
+        snapshot.docs.forEach((farm) => {
+          next[farm.id] = { id: farm.id, ...farm.data() };
+        });
+        setFarms(next);
+        farmsReady = true;
+        setMarketError("");
+        markReady();
+      },
+      fail
+    );
+    return () => {
+      unsubscribeProducts();
+      unsubscribeFarms();
+    };
   }, []);
 
   useEffect(() => {
@@ -241,10 +283,43 @@ export default function BuyerDashboard() {
 
   const enrichedProducts = useMemo(() => {
     const producerIdKey = (p: AnyDoc) => p.producerUid || p.producerId;
+    const normalizedSearch = search.trim().toLowerCase();
     const list = products
       .filter((p) => {
         const producerId = String(producerIdKey(p) || "");
-        return !producerId || !blockedProducerIds.has(producerId);
+        const farm = producerId ? farms[producerId] : null;
+        const searchable = [
+          p.name,
+          p.title,
+          p.description,
+          p.department,
+          p.category,
+          ...(Array.isArray(p.tags) ? p.tags : []),
+          farm?.farmName,
+          farm?.city,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const hasStock =
+          p.archived !== true &&
+          p.inStock !== false &&
+          Number.isInteger(Number(p.quantityAvailable)) &&
+          Number(p.quantityAvailable) > 0;
+        const matchesDepartment =
+          department === "all" || String(p.department || "Other") === department;
+        const matchesFulfillment =
+          fulfillmentFilter === "all" ||
+          (fulfillmentFilter === "delivery"
+            ? farm?.deliveryAvailable === true
+            : farm?.pickupAvailable !== false);
+        return (
+          hasStock &&
+          (!producerId || !blockedProducerIds.has(producerId)) &&
+          (!normalizedSearch || searchable.includes(normalizedSearch)) &&
+          matchesDepartment &&
+          matchesFulfillment
+        );
       })
       .map((p) => {
         const pid = producerIdKey(p);
@@ -264,7 +339,21 @@ export default function BuyerDashboard() {
     });
 
     return list;
-  }, [products, farms, buyerLoc, blockedProducerIds]);
+  }, [
+    products,
+    farms,
+    buyerLoc,
+    blockedProducerIds,
+    search,
+    department,
+    fulfillmentFilter,
+  ]);
+
+  const departments = useMemo(
+    () =>
+      [...new Set(products.map((product) => String(product.department || "Other")))].sort(),
+    [products]
+  );
 
   const cartCount = useMemo(() => {
     return cart.items.reduce((s, i) => s + Number(i.qty || 0), 0);
@@ -304,83 +393,101 @@ export default function BuyerDashboard() {
   async function addToCart(product: AnyDoc) {
     const user = auth.currentUser;
     if (!user) {
-      alert("Please sign in first.");
+      setNotice("Please sign in first.");
       return;
     }
 
     const uid = user.uid;
     const cartRef = doc(db, "carts", uid);
+    const productRef = doc(db, "products", String(product.id));
+    try {
+      await runTransaction(db, async (transaction) => {
+        const [cartSnapshot, productSnapshot] = await Promise.all([
+          transaction.get(cartRef),
+          transaction.get(productRef),
+        ]);
+        if (!productSnapshot.exists()) throw new Error("This listing is no longer available.");
+        const currentProduct = { id: productSnapshot.id, ...productSnapshot.data() };
+        const available = Number((currentProduct as AnyDoc).quantityAvailable);
+        if (
+          (currentProduct as AnyDoc).inStock === false ||
+          (currentProduct as AnyDoc).archived === true ||
+          !Number.isInteger(available) ||
+          available < 1
+        ) {
+          throw new Error("This item is sold out.");
+        }
 
-    const item = buildCartItemFromProduct(product);
-
-    // Read current items once, then write back updated items (and bump cartVersion)
-    const snap = await getDoc(cartRef);
-    const snapData = (snap.exists() ? (snap.data() as any) : {}) || {};
-    const existing: CartItem[] = Array.isArray(snapData.items) ? (snapData.items as CartItem[]) : [];
-    const currentVersion =
-      typeof snapData.cartVersion === "number" && Number.isFinite(snapData.cartVersion)
-        ? snapData.cartVersion
-        : 0;
-    const nextVersion = currentVersion + 1;
-
-    const next = [...existing];
-    const idx = next.findIndex((x) => x.productId === item.productId);
-
-    if (idx >= 0) {
-      next[idx] = { ...next[idx], qty: Number(next[idx].qty || 1) + 1 };
-    } else {
-      next.push(item);
+        const item = buildCartItemFromProduct(currentProduct);
+        const cartData = cartSnapshot.exists() ? cartSnapshot.data() : {};
+        const existing: CartItem[] = Array.isArray((cartData as AnyDoc).items)
+          ? ((cartData as AnyDoc).items as CartItem[])
+          : [];
+        const currentVersion = Number.isInteger((cartData as AnyDoc).cartVersion)
+          ? Number((cartData as AnyDoc).cartVersion)
+          : 0;
+        const next = [...existing];
+        const index = next.findIndex((entry) => entry.productId === item.productId);
+        const nextQuantity =
+          index >= 0 ? Number(next[index].qty || 0) + 1 : 1;
+        if (nextQuantity > available) {
+          throw new Error(`Only ${available} ${available === 1 ? "item is" : "items are"} available.`);
+        }
+        if (index >= 0) next[index] = { ...next[index], qty: nextQuantity };
+        else next.push(item);
+        transaction.set(
+          cartRef,
+          {
+            items: next,
+            cartVersion: currentVersion + 1,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      });
+      clearLocalCartKeys();
+      setNotice(`${String(product.name || product.title || "Item")} added to your cart.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not add this item.");
     }
-
-    await setDoc(
-      cartRef,
-      { items: next, cartVersion: nextVersion, updatedAt: serverTimestamp() },
-      { merge: true }
-    );
-
-    // Ensure legacy local cart cannot “ghost” the count bar
-    clearLocalCartKeys();
   }
 
-  async function reportListing(product: AnyDoc) {
+  async function submitListingReport() {
     const user = auth.currentUser;
-    if (!user) return alert("Please sign in first.");
-    const reason = window.prompt(
-      "Why are you reporting this listing? Do not include passwords or payment-card information."
-    );
-    if (!reason?.trim()) return;
+    if (!user || !reportTarget || !reportReason.trim()) return;
 
     try {
       await addDoc(collection(db, "reports"), {
         reporterId: user.uid,
         type: "listing",
-        listingId: String(product.id),
-        reportedUserId: String(product.producerUid || product.producerId || ""),
-        reason: reason.trim().slice(0, 1000),
+        listingId: String(reportTarget.id),
+        reportedUserId: String(
+          reportTarget.producerUid || reportTarget.producerId || ""
+        ),
+        reason: reportReason.trim().slice(0, 1000),
         status: "open",
         createdAt: serverTimestamp(),
       });
-      alert("Report received. Thank you for helping keep the marketplace safe.");
+      setNotice("Report received. Thank you for helping keep the marketplace safe.");
+      setReportTarget(null);
+      setReportReason("");
     } catch (error) {
       console.error("Listing report failed:", error);
-      alert("We could not submit the report. Please try again or contact support.");
+      setNotice("We could not submit the report. Please try again or contact support.");
     }
   }
 
-  async function blockProducer(product: AnyDoc, farm: AnyDoc | null) {
+  async function confirmBlockProducer() {
     const user = auth.currentUser;
-    if (!user) return alert("Please sign in first.");
+    if (!user || !blockTarget) return;
+    const { product, farm } = blockTarget;
     const producerId = String(product.producerUid || product.producerId || "");
-    if (!producerId) return alert("This producer cannot be blocked right now.");
-    const displayName =
-      farm?.farmName || farm?.name || product.producerName || "this producer";
-    if (
-      !window.confirm(
-        `Block ${displayName}? Their listings will be hidden. You can unblock them from Account and safety.`
-      )
-    ) {
+    if (!producerId) {
+      setNotice("This producer cannot be blocked right now.");
       return;
     }
+    const displayName =
+      farm?.farmName || farm?.name || product.producerName || "this producer";
 
     try {
       await setDoc(doc(db, "users", user.uid, "blocked", producerId), {
@@ -388,9 +495,11 @@ export default function BuyerDashboard() {
         displayName: String(displayName).slice(0, 120),
         createdAt: serverTimestamp(),
       });
+      setNotice(`${displayName} is now hidden. You can unblock them from Account.`);
+      setBlockTarget(null);
     } catch (error) {
       console.error("Producer block failed:", error);
-      alert("We could not block this producer. Please try again.");
+      setNotice("We could not block this producer. Please try again.");
     }
   }
 
@@ -408,7 +517,7 @@ export default function BuyerDashboard() {
       localStorage.setItem(BUYER_LOC_KEY, JSON.stringify(loc));
     } catch (e) {
       console.error(e);
-      alert("Unable to get your location. Please allow location access in your browser.");
+      setNotice("Unable to get your location. Please allow location access in your browser.");
     } finally {
       setLocBusy(false);
     }
@@ -433,12 +542,20 @@ export default function BuyerDashboard() {
       >
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-4xl font-extrabold text-[#2c2c2c]">Fresh from Maine</h1>
+            <h1 className="text-3xl sm:text-4xl font-extrabold text-[#2c2c2c]">
+              Fresh from Maine
+            </h1>
             <div className="text-sm text-stone-700 mt-1">
-              Location set • Sorting by nearest farms{" "}
-              <button onClick={clearLocation} className="underline ml-2">
-                Clear
-              </button>
+              {buyerLoc ? (
+                <>
+                  Location set • Sorting by nearest farms{" "}
+                  <button onClick={clearLocation} className="underline ml-2">
+                    Clear
+                  </button>
+                </>
+              ) : (
+                "Set your location to sort by nearest farm."
+              )}
             </div>
           </div>
 
@@ -459,13 +576,92 @@ export default function BuyerDashboard() {
             </button>
 
             <button
-              onClick={() => navigate("/")}
+              onClick={() => logout()}
               className="bg-white px-4 py-2 rounded-full font-bold border border-stone-200"
             >
-              Logout
+              Sign Out
             </button>
           </div>
         </div>
+
+        {notice && (
+          <div
+            className="mt-5 flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950"
+            role="status"
+          >
+            <span>{notice}</span>
+            <button
+              type="button"
+              className="font-bold"
+              aria-label="Dismiss message"
+              onClick={() => setNotice("")}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        <section
+          className="mt-6 grid gap-3 rounded-2xl border border-stone-200 bg-white/80 p-4 shadow-sm sm:grid-cols-3"
+          aria-label="Marketplace filters"
+        >
+          <label className="text-sm font-bold text-stone-700">
+            Search
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Tomatoes, eggs, Waterville…"
+              className="mt-1 w-full rounded-xl border border-stone-300 bg-white px-3 py-2 font-normal"
+            />
+          </label>
+          <label className="text-sm font-bold text-stone-700">
+            Department
+            <select
+              value={department}
+              onChange={(event) => setDepartment(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-stone-300 bg-white px-3 py-2 font-normal"
+            >
+              <option value="all">All departments</option>
+              {departments.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-bold text-stone-700">
+            Fulfillment
+            <select
+              value={fulfillmentFilter}
+              onChange={(event) => setFulfillmentFilter(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-stone-300 bg-white px-3 py-2 font-normal"
+            >
+              <option value="all">Pickup or delivery</option>
+              <option value="pickup">Pickup available</option>
+              <option value="delivery">Delivery available</option>
+            </select>
+          </label>
+        </section>
+
+        {marketLoading && (
+          <div className="mt-8 rounded-2xl bg-white p-8 text-center text-stone-600">
+            Loading fresh Maine listings…
+          </div>
+        )}
+        {marketError && (
+          <div className="mt-8 rounded-2xl border border-red-200 bg-red-50 p-5 text-red-900" role="alert">
+            {marketError}
+          </div>
+        )}
+        {!marketLoading && !marketError && enrichedProducts.length === 0 && (
+          <div className="mt-8 rounded-2xl bg-white p-8 text-center">
+            <h2 className="text-xl font-bold text-stone-900">No matching products yet</h2>
+            <p className="mt-2 text-stone-600">
+              Try clearing a filter, or check back as Maine producers add fresh inventory.
+            </p>
+          </div>
+        )}
 
         <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
           {enrichedProducts.map(({ product, farm, miles }) => (
@@ -522,15 +718,19 @@ export default function BuyerDashboard() {
                 </div>
 
                 <div className="mt-3 flex gap-2 flex-wrap">
-                  {product.deliveryAvailable ? (
-                    <span className="text-xs font-bold bg-orange-100 text-orange-700 px-2 py-1 rounded-full">
-                      Delivery
-                    </span>
-                  ) : (
+                  {farm?.pickupAvailable !== false && (
                     <span className="text-xs font-bold bg-green-100 text-green-700 px-2 py-1 rounded-full">
                       Pickup
                     </span>
                   )}
+                  {farm?.deliveryAvailable === true && (
+                    <span className="text-xs font-bold bg-orange-100 text-orange-700 px-2 py-1 rounded-full">
+                      Delivery
+                    </span>
+                  )}
+                  <span className="text-xs font-bold bg-stone-100 text-stone-700 px-2 py-1 rounded-full">
+                    {Number(product.quantityAvailable)} available
+                  </span>
                 </div>
 
                 <button
@@ -542,14 +742,17 @@ export default function BuyerDashboard() {
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => reportListing(product)}
+                    onClick={() => {
+                      setReportTarget(product);
+                      setReportReason("");
+                    }}
                     className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900"
                   >
                     Report listing
                   </button>
                   <button
                     type="button"
-                    onClick={() => blockProducer(product, farm)}
+                    onClick={() => setBlockTarget({ product, farm })}
                     className="rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm font-bold text-stone-800"
                   >
                     Block producer
@@ -582,6 +785,82 @@ export default function BuyerDashboard() {
             </div>
           </div>
         ) : null}
+
+        {reportTarget && (
+          <div
+            className="fixed inset-0 z-[80] grid place-items-center bg-black/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-listing-title"
+          >
+            <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+              <h2 id="report-listing-title" className="text-xl font-bold">
+                Report listing
+              </h2>
+              <p className="mt-2 text-sm text-stone-600">
+                Explain the safety or policy concern. Do not include passwords or card information.
+              </p>
+              <textarea
+                autoFocus
+                maxLength={1000}
+                value={reportReason}
+                onChange={(event) => setReportReason(event.target.value)}
+                className="mt-4 min-h-32 w-full rounded-xl border border-stone-300 p-3"
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl bg-stone-100 px-4 py-2 font-bold"
+                  onClick={() => setReportTarget(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!reportReason.trim()}
+                  className="rounded-xl bg-amber-700 px-4 py-2 font-bold text-white disabled:opacity-50"
+                  onClick={submitListingReport}
+                >
+                  Submit report
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {blockTarget && (
+          <div
+            className="fixed inset-0 z-[80] grid place-items-center bg-black/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="block-producer-title"
+          >
+            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+              <h2 id="block-producer-title" className="text-xl font-bold">
+                Block this producer?
+              </h2>
+              <p className="mt-2 text-stone-600">
+                Their listings will be hidden. You can unblock them from Account and safety.
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-xl bg-stone-100 px-4 py-2 font-bold"
+                  onClick={() => setBlockTarget(null)}
+                >
+                  Keep visible
+                </button>
+                <button
+                  type="button"
+                  className="rounded-xl bg-red-700 px-4 py-2 font-bold text-white"
+                  onClick={confirmBlockProducer}
+                >
+                  Block producer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

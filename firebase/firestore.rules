@@ -11,6 +11,26 @@ service cloud.firestore {
         || data.ownerId == request.auth.uid;
     }
 
+    function currentProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function validProduct(data) {
+      return data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 120
+        && data.price is number
+        && data.price > 0
+        && data.priceCents is int
+        && data.priceCents > 0
+        && data.quantityAvailable is int
+        && data.quantityAvailable >= 0
+        && data.inStock is bool
+        && data.producerUid == request.auth.uid
+        && data.producerId == request.auth.uid
+        && data.ownerId == request.auth.uid;
+    }
+
     function acceptedCurrentProducerTerms() {
       let profile = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
       return signedIn()
@@ -26,11 +46,22 @@ service cloud.firestore {
     match /products/{productId} {
       allow read: if signedIn();
       allow create: if acceptedCurrentProducerTerms()
-        && ownsProduct(request.resource.data);
+        && ownsProduct(request.resource.data)
+        && validProduct(request.resource.data);
       allow update: if acceptedCurrentProducerTerms()
         && ownsProduct(resource.data)
-        && ownsProduct(request.resource.data);
-      allow delete: if signedIn() && ownsProduct(resource.data);
+        && ownsProduct(request.resource.data)
+        && validProduct(request.resource.data)
+        && (
+          !resource.data.keys().hasAll(["producerUid", "producerId", "ownerId"])
+          || (
+            request.resource.data.producerUid == resource.data.producerUid
+            && request.resource.data.producerId == resource.data.producerId
+            && request.resource.data.ownerId == resource.data.ownerId
+          )
+        );
+      // Listings are archived instead of deleted so order references remain intact.
+      allow delete: if false;
     }
 
     // Members may maintain their own profile and accept legal terms, but only
@@ -39,6 +70,7 @@ service cloud.firestore {
       allow read: if signedIn() && request.auth.uid == userId;
       allow create: if signedIn()
         && request.auth.uid == userId
+        && request.resource.data.role in ["buyer", "producer"]
         && !request.resource.data.keys().hasAny([
           "subscription",
           "stripeCustomerId",
@@ -47,6 +79,13 @@ service cloud.firestore {
         ]);
       allow update: if signedIn()
         && request.auth.uid == userId
+        && (
+          request.resource.data.role == resource.data.role
+          || (
+            !resource.data.keys().hasAny(["role"])
+            && request.resource.data.role in ["buyer", "producer"]
+          )
+        )
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
           "subscription",
           "stripeCustomerId",
@@ -84,12 +123,43 @@ service cloud.firestore {
     // Farm profiles are marketplace information. Only the owning producer writes.
     match /farms/{farmId} {
       allow read: if signedIn();
-      allow write: if signedIn() && request.auth.uid == farmId;
+      allow create, update: if signedIn()
+        && request.auth.uid == farmId
+        && currentProfile().role == "producer"
+        && request.resource.data.producerUid == request.auth.uid
+        && request.resource.data.farmName is string
+        && request.resource.data.farmName.size() > 0
+        && request.resource.data.farmName.size() <= 120
+        && request.resource.data.city is string
+        && request.resource.data.city.size() > 0
+        && request.resource.data.city.size() <= 120
+        && request.resource.data.state == "ME"
+        && request.resource.data.zip is string
+        && request.resource.data.zip.size() >= 5
+        && request.resource.data.zip.size() <= 10
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 10
+        && request.resource.data.phone.size() <= 30
+        && request.resource.data.pickupAvailable is bool
+        && request.resource.data.deliveryAvailable is bool
+        && !request.resource.data.keys().hasAny(["addressLine1"]);
+      allow delete: if false;
     }
 
     // Carts: own cart only
     match /carts/{cartId} {
-      allow read, write: if signedIn() && request.auth.uid == cartId;
+      allow read, delete: if signedIn() && request.auth.uid == cartId;
+      allow create, update: if signedIn()
+        && request.auth.uid == cartId
+        && request.resource.data.items is list
+        && request.resource.data.items.size() <= 100
+        && (
+          !request.resource.data.keys().hasAny(["cartVersion"])
+          || (
+            request.resource.data.cartVersion is int
+            && request.resource.data.cartVersion >= 0
+          )
+        );
     }
 
     // Buyers may only read their own server-created orders.
@@ -98,9 +168,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Producer orders subcollection: producer can read/update their own
+    // Producer order mirrors are server-authored. Producers update status only
+    // through updateProducerOrderStatus so both buyer and producer views stay in sync.
     match /producerOrders/{producerId}/orders/{orderId} {
-      allow read, write: if signedIn() && request.auth.uid == producerId;
+      allow read: if signedIn() && request.auth.uid == producerId;
+      allow write: if false;
     }
   }
 }

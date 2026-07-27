@@ -1,9 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { deleteField, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { PRODUCER_TERMS_VERSION } from "@mfm/shared";
 import { useAuth } from "../App";
 import { db } from "../firebase";
+import { hasUsPhoneNumber, isMaineZip } from "../utils/validation";
 
 type PaymentPreference = "direct" | "stripe";
 
@@ -18,6 +19,10 @@ export default function ProducerOnboardingPage() {
   const [zip, setZip] = useState("");
   const [description, setDescription] = useState("");
   const [paymentPreference, setPaymentPreference] = useState<PaymentPreference>("direct");
+  const [pickupAvailable, setPickupAvailable] = useState(true);
+  const [deliveryAvailable, setDeliveryAvailable] = useState(false);
+  const [legacyAddressLine1, setLegacyAddressLine1] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     if (!user) return;
@@ -31,6 +36,9 @@ export default function ProducerOnboardingPage() {
         setCity(String(data.city || ""));
         setZip(String(data.zip || ""));
         setDescription(String(data.description || ""));
+        setPickupAvailable(data.pickupAvailable !== false);
+        setDeliveryAvailable(data.deliveryAvailable === true);
+        setLegacyAddressLine1(String(data.addressLine1 || ""));
         setPaymentPreference(
           data.paymentPreference === "stripe" ||
             user.producerPaymentPreference === "stripe" ||
@@ -58,16 +66,28 @@ export default function ProducerOnboardingPage() {
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (!farmName.trim() || !phone.trim() || !city.trim() || zip.trim().length < 5) {
-      alert("Please provide your farm or business name, phone, Maine city, and ZIP code.");
+    setErrorMessage("");
+    if (!farmName.trim() || !city.trim()) {
+      setErrorMessage("Provide your farm or business name and Maine city or town.");
+      return;
+    }
+    if (!hasUsPhoneNumber(phone)) {
+      setErrorMessage("Enter a phone number buyers can use for pickup or delivery.");
+      return;
+    }
+    if (!isMaineZip(zip)) {
+      setErrorMessage("Enter a valid Maine ZIP code.");
+      return;
+    }
+    if (!pickupAvailable && !deliveryAvailable) {
+      setErrorMessage("Choose pickup, delivery, or both.");
       return;
     }
 
     setSaving(true);
     try {
       const completedAt = serverTimestamp();
-      await Promise.all([
-        setDoc(
+      await setDoc(
           doc(db, "users", user.uid),
           {
             role: "producer",
@@ -76,11 +96,14 @@ export default function ProducerOnboardingPage() {
               completedAt,
               paymentPreference,
             },
+            ...(legacyAddressLine1
+              ? { producerPrivate: { addressLine1: legacyAddressLine1 } }
+              : {}),
             updatedAt: serverTimestamp(),
           },
           { merge: true }
-        ),
-        setDoc(
+        );
+      await setDoc(
           doc(db, "farms", user.uid),
           {
             producerUid: user.uid,
@@ -90,13 +113,16 @@ export default function ProducerOnboardingPage() {
             state: "ME",
             zip: zip.trim(),
             description: description.trim(),
+            addressLine1: deleteField(),
             paymentPreference,
-            acceptsStripePayments: paymentPreference === "stripe",
+            acceptsStripePayments:
+              paymentPreference === "stripe" && user.hasStripeConnectAccount === true,
+            pickupAvailable,
+            deliveryAvailable,
             updatedAt: serverTimestamp(),
           },
           { merge: true }
-        ),
-      ]);
+        );
       await refreshProfile();
       navigate(
         paymentPreference === "stripe"
@@ -106,7 +132,7 @@ export default function ProducerOnboardingPage() {
       );
     } catch (error) {
       console.error("Producer setup failed:", error);
-      alert("We could not save your producer account. Please try again.");
+      setErrorMessage("We could not save your producer account. Please try again.");
       setSaving(false);
     }
   };
@@ -124,6 +150,11 @@ export default function ProducerOnboardingPage() {
         <p className="mt-2 text-stone-600">
           Tell buyers who you are and choose how you want to handle product payments.
         </p>
+        {errorMessage && (
+          <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+            {errorMessage}
+          </div>
+        )}
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <label className="block md:col-span-2">
@@ -132,6 +163,7 @@ export default function ProducerOnboardingPage() {
               value={farmName}
               onChange={(event) => setFarmName(event.target.value)}
               className="mt-1 w-full rounded-lg border border-stone-300 p-3"
+              autoComplete="organization"
               required
             />
           </label>
@@ -141,6 +173,8 @@ export default function ProducerOnboardingPage() {
               value={phone}
               onChange={(event) => setPhone(event.target.value)}
               className="mt-1 w-full rounded-lg border border-stone-300 p-3"
+              type="tel"
+              autoComplete="tel"
               required
             />
           </label>
@@ -151,6 +185,8 @@ export default function ProducerOnboardingPage() {
               onChange={(event) => setZip(event.target.value)}
               className="mt-1 w-full rounded-lg border border-stone-300 p-3"
               inputMode="numeric"
+              autoComplete="postal-code"
+              maxLength={10}
               required
             />
           </label>
@@ -160,6 +196,7 @@ export default function ProducerOnboardingPage() {
               value={city}
               onChange={(event) => setCity(event.target.value)}
               className="mt-1 w-full rounded-lg border border-stone-300 p-3"
+              autoComplete="address-level2"
               required
             />
           </label>
@@ -170,9 +207,33 @@ export default function ProducerOnboardingPage() {
               onChange={(event) => setDescription(event.target.value)}
               className="mt-1 min-h-28 w-full rounded-lg border border-stone-300 p-3"
               placeholder="What do you grow, raise, make, or produce?"
+              maxLength={1000}
             />
           </label>
         </div>
+
+        <fieldset className="mt-7">
+          <legend className="font-bold text-stone-900">Fulfillment options</legend>
+          <p className="mt-1 text-sm text-stone-600">
+            Select every option you currently offer. You can change these later.
+          </p>
+          <label className="mt-3 flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={pickupAvailable}
+              onChange={(event) => setPickupAvailable(event.target.checked)}
+            />
+            <span>Buyer pickup</span>
+          </label>
+          <label className="mt-3 flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={deliveryAvailable}
+              onChange={(event) => setDeliveryAvailable(event.target.checked)}
+            />
+            <span>Producer delivery</span>
+          </label>
+        </fieldset>
 
         <fieldset className="mt-7">
           <legend className="font-bold text-stone-900">How will buyers pay for your goods?</legend>

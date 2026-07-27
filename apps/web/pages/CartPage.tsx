@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "../firebase";
 import { useNavigate } from "react-router-dom";
-import { doc, onSnapshot, setDoc, serverTimestamp, getDoc } from "firebase/firestore";
+import { doc, onSnapshot, runTransaction, serverTimestamp, getDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
 type CartItem = {
@@ -15,6 +15,7 @@ type CartItem = {
   producerId?: string;
   producerName?: string;
   imageUrl?: string;
+  quantityAvailable?: number;
 };
 
 type CartState = {
@@ -140,6 +141,11 @@ export default function CartPage() {
   const [scheduledTime, setScheduledTime] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [farmOptions, setFarmOptions] = useState<
+    Record<string, { pickupAvailable: boolean; deliveryAvailable: boolean; farmName: string }>
+  >({});
+  const [availability, setAvailability] = useState<Record<string, number>>({});
 
   const didMigrateRef = useRef(false);
 
@@ -150,22 +156,23 @@ export default function CartPage() {
   // Write cart to Firestore
   async function writeCart(uid: string, next: CartState) {
     const ref = doc(db, "carts", uid);
-    const snap = await getDoc(ref);
-    const snapData = (snap.exists() ? (snap.data() as any) : {}) || {};
-    const currentVersion =
-      typeof snapData.cartVersion === "number" && Number.isFinite(snapData.cartVersion)
-        ? snapData.cartVersion
-        : 0;
-    const nextVersion = currentVersion + 1;
-    await setDoc(
-      ref,
-      {
-        items: next.items,
-        cartVersion: nextVersion,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+    await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(ref);
+      const snapData = (snap.exists() ? (snap.data() as any) : {}) || {};
+      const currentVersion =
+        typeof snapData.cartVersion === "number" && Number.isFinite(snapData.cartVersion)
+          ? snapData.cartVersion
+          : 0;
+      transaction.set(
+        ref,
+        {
+          items: next.items,
+          cartVersion: currentVersion + 1,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
   }
 
   useEffect(() => {
@@ -234,11 +241,99 @@ export default function CartPage() {
     };
   }, []);
 
+  const productIdsKey = cart.items
+    .map((item) => item.productId || item.id || "")
+    .filter(Boolean)
+    .sort()
+    .join(",");
+  const producerIdsKey = cart.items
+    .map((item) => item.producerId || "")
+    .filter(Boolean)
+    .sort()
+    .join(",");
+
+  useEffect(() => {
+    let cancelled = false;
+    const productIds = Array.from(
+      new Set<string>(productIdsKey.split(",").filter(Boolean))
+    );
+    const producerIds = Array.from(
+      new Set<string>(producerIdsKey.split(",").filter(Boolean))
+    );
+    Promise.all([
+      Promise.all(
+        productIds.map(async (productId) => {
+          const snapshot = await getDoc(doc(db, "products", productId));
+          const product = snapshot.exists() ? snapshot.data() : null;
+          return [
+            productId,
+            product?.inStock === false ? 0 : Number(product?.quantityAvailable || 0),
+          ] as const;
+        })
+      ),
+      Promise.all(
+        producerIds.map(async (producerId) => {
+          const snapshot = await getDoc(doc(db, "farms", producerId));
+          const farm = snapshot.exists() ? snapshot.data() : {};
+          return [
+            producerId,
+            {
+              pickupAvailable: farm?.pickupAvailable !== false,
+              deliveryAvailable: farm?.deliveryAvailable === true,
+              farmName: String(farm?.farmName || "Producer"),
+            },
+          ] as const;
+        })
+      ),
+    ])
+      .then(([productEntries, farmEntries]) => {
+        if (cancelled) return;
+        setAvailability(Object.fromEntries(productEntries));
+        setFarmOptions(Object.fromEntries(farmEntries));
+      })
+      .catch((error) => {
+        console.error("Could not refresh cart availability:", error);
+        if (!cancelled) setNotice("Could not refresh current inventory. Try again.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [productIdsKey, producerIdsKey]);
+
+  const allPickupAvailable = useMemo(
+    () =>
+      Object.keys(farmOptions).length > 0 &&
+      Object.keys(farmOptions).every(
+        (producerId) => farmOptions[producerId].pickupAvailable
+      ),
+    [farmOptions]
+  );
+  const allDeliveryAvailable = useMemo(
+    () =>
+      Object.keys(farmOptions).length > 0 &&
+      Object.keys(farmOptions).every(
+        (producerId) => farmOptions[producerId].deliveryAvailable
+      ),
+    [farmOptions]
+  );
+
+  useEffect(() => {
+    if (deliveryMethod === "delivery" && !allDeliveryAvailable && allPickupAvailable) {
+      setDeliveryMethod("pickup");
+    }
+  }, [allDeliveryAvailable, allPickupAvailable, deliveryMethod]);
+
   function setQty(index: number, qty: number) {
     const user = auth.currentUser;
     if (!user) return;
 
-    const safe = Math.max(1, Number(qty || 1));
+    const productId = cart.items[index]?.productId || cart.items[index]?.id || "";
+    const maximum = availability[productId] ?? 999;
+    if (maximum < 1) {
+      setNotice(`${cart.items[index]?.name || "This item"} is out of stock. Remove it to continue.`);
+      return;
+    }
+    const safe = Math.min(maximum, Math.max(1, Math.trunc(Number(qty || 1))));
     const next = { items: cart.items.map((it, i) => (i === index ? { ...it, qty: safe } : it)) };
     setCart(next);
     writeCart(user.uid, next).catch((e) => console.error("writeCart(setQty) failed:", e));
@@ -263,7 +358,12 @@ export default function CartPage() {
   }
 
   const scheduledAt = useMemo(() => {
-    if (scheduledDate && scheduledTime) return `${scheduledDate} ${scheduledTime}`;
+    if (scheduledDate && scheduledTime) {
+      const [year, month, day] = scheduledDate.split("-").map(Number);
+      const [hour, minute] = scheduledTime.split(":").map(Number);
+      const localDate = new Date(year, month - 1, day, hour, minute, 0, 0);
+      return Number.isFinite(localDate.getTime()) ? localDate.toISOString() : null;
+    }
     return null;
   }, [scheduledDate, scheduledTime]);
 
@@ -287,6 +387,12 @@ export default function CartPage() {
     const selected = new Date(y, (m || 1) - 1, day, hour || 0, min || 0, 0, 0);
     const selectedMs = selected.getTime();
     if (deliveryMethod === "pickup") {
+      if (!allPickupAvailable) {
+        return {
+          valid: false,
+          error: "At least one producer in this cart does not offer pickup. Split the cart by fulfillment option.",
+        };
+      }
       if (selectedMs < pickupMinMs) {
         return {
           valid: false,
@@ -294,6 +400,12 @@ export default function CartPage() {
         };
       }
     } else {
+      if (!allDeliveryAvailable) {
+        return {
+          valid: false,
+          error: "At least one producer in this cart does not offer delivery. Split the cart by fulfillment option.",
+        };
+      }
       if (selectedMs < deliveryMinMs) {
         return {
           valid: false,
@@ -302,7 +414,13 @@ export default function CartPage() {
       }
     }
     return { valid: true, error: null };
-  }, [scheduledDate, scheduledTime, deliveryMethod]);
+  }, [
+    scheduledDate,
+    scheduledTime,
+    deliveryMethod,
+    allPickupAvailable,
+    allDeliveryAvailable,
+  ]);
 
   const schedulingValid = schedulingValidation.valid;
   const schedulingError = schedulingValidation.error;
@@ -321,11 +439,23 @@ export default function CartPage() {
       if (!cart.items.length) return;
 
       if (!scheduledDate?.trim() || !scheduledTime?.trim()) {
-        alert(`Please select a ${deliveryMethod === "delivery" ? "delivery" : "pickup"} date and time.`);
+        setNotice(
+          `Please select a ${deliveryMethod === "delivery" ? "delivery" : "pickup"} date and time.`
+        );
         return;
       }
       if (!schedulingValid && schedulingError) {
-        alert(schedulingError);
+        setNotice(schedulingError);
+        return;
+      }
+      const unavailableItem = cart.items.find((item) => {
+        const productId = item.productId || item.id || "";
+        return (availability[productId] ?? 0) < Number(item.qty || 0);
+      });
+      if (unavailableItem) {
+        setNotice(
+          `${unavailableItem.name} no longer has the requested quantity. Adjust or remove it.`
+        );
         return;
       }
 
@@ -333,10 +463,6 @@ export default function CartPage() {
 
       const user = auth.currentUser;
       if (!user) return;
-      const cartRef = doc(db, "carts", user.uid);
-      const cartSnap = await getDoc(cartRef);
-      const cartData = (cartSnap.exists() ? cartSnap.data() : {}) as any;
-      const snapshot = cartData?.perProducerSnapshot || {};
 
       const resolvedItems = await resolveProducerIdsForCartItems(cart.items);
       const missingProducerId = resolvedItems.find(
@@ -344,7 +470,7 @@ export default function CartPage() {
       );
       if (missingProducerId) {
         const productId = missingProducerId.productId || missingProducerId.id || "(unknown id)";
-        alert(
+        setNotice(
           `Cart item missing producer. Please remove "${missingProducerId.name || productId}" and add it again from the market.`
         );
         return;
@@ -358,10 +484,9 @@ export default function CartPage() {
         { fulfillmentMethod: "pickup" | "delivery"; selectedWindowId: string }
       > = {};
       uniqueProducerIds.forEach((producerId) => {
-        const selection = snapshot[producerId];
         perProducer[producerId] = {
           fulfillmentMethod: deliveryMethod,
-          selectedWindowId: selection?.window?.id ?? "customer-selected",
+          selectedWindowId: "customer-selected",
         };
       });
 
@@ -370,7 +495,10 @@ export default function CartPage() {
         "createCartCheckoutSessionV2"
       );
       const result: any = await createMarketplaceOrder({
-        idempotencyKey: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        idempotencyKey:
+          typeof window.crypto?.randomUUID === "function"
+            ? window.crypto.randomUUID()
+            : `${Date.now()}_${Math.random().toString(36).slice(2)}`,
         items: resolvedItems.map((it) => ({
           productId: it.productId || it.id,
           qty: it.qty,
@@ -382,9 +510,6 @@ export default function CartPage() {
       });
       const data = result?.data;
       if (data?.paymentMode === "direct" && data?.orderId) {
-        alert(
-          "Order placed. Arrange payment directly with each producer at pickup or delivery."
-        );
         navigate("/buyer/orders");
         return;
       }
@@ -392,10 +517,13 @@ export default function CartPage() {
         window.location.href = data.url;
         return;
       }
-      alert("The order was created but no next step was returned.");
+      setNotice("The order was created but no next step was returned.");
     } catch (e: any) {
       console.error(e);
-      alert(e?.message || "Unable to start checkout. Check console for details.");
+      setNotice(
+        e?.message ||
+          "Unable to place the order. Refresh inventory and try again."
+      );
     } finally {
       setIsLoading(false);
     }
@@ -407,7 +535,7 @@ export default function CartPage() {
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-3xl font-extrabold text-[#2c2c2c]">Cart</h1>
           <div className="flex gap-2">
-            <button onClick={() => navigate("/dashboard")} className="bg-white px-4 py-2 rounded-lg font-bold">
+            <button onClick={() => navigate("/buyer")} className="bg-white px-4 py-2 rounded-lg font-bold">
               Back
             </button>
             <button onClick={clearCart} className="bg-white px-4 py-2 rounded-lg font-bold opacity-70">
@@ -415,6 +543,23 @@ export default function CartPage() {
             </button>
           </div>
         </div>
+
+        {notice && (
+          <div
+            className="mb-5 flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+            role="status"
+          >
+            <span>{notice}</span>
+            <button
+              type="button"
+              aria-label="Dismiss message"
+              className="font-bold"
+              onClick={() => setNotice("")}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl shadow p-5">
           <div className="flex items-center justify-between">
@@ -427,10 +572,14 @@ export default function CartPage() {
           ) : (
             <div className="mt-4 space-y-3">
               {cart.items.map((it, idx) => (
-                <div key={idx} className="flex items-start justify-between border rounded-xl p-3">
-                  <div className="flex gap-3">
+                <div key={idx} className="flex flex-col gap-4 rounded-xl border p-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex min-w-0 gap-3">
                     {it.imageUrl ? (
-                      <img src={it.imageUrl} className="w-16 h-16 object-cover rounded-lg" />
+                      <img
+                        src={it.imageUrl}
+                        alt=""
+                        className="w-16 h-16 object-cover rounded-lg"
+                      />
                     ) : (
                       <div className="w-16 h-16 rounded-lg bg-stone-100" />
                     )}
@@ -444,7 +593,7 @@ export default function CartPage() {
                     </div>
                   </div>
 
-                  <div className="flex flex-col items-end gap-2">
+                  <div className="flex flex-col items-start gap-2 sm:items-end">
                     <div className="flex items-center gap-2">
                       <button
                         className="px-2 py-1 bg-stone-100 rounded"
@@ -456,11 +605,21 @@ export default function CartPage() {
                         className="w-14 text-center border rounded px-2 py-1"
                         type="number"
                         min={1}
+                        max={
+                          availability[it.productId || it.id || ""] !== undefined
+                            ? Math.max(1, availability[it.productId || it.id || ""])
+                            : undefined
+                        }
+                        step={1}
                         value={it.qty}
                         onChange={(e) => setQty(idx, Number(e.target.value))}
                       />
                       <button
-                        className="px-2 py-1 bg-stone-100 rounded"
+                        className="px-2 py-1 bg-stone-100 rounded disabled:opacity-40"
+                        disabled={
+                          Number(it.qty || 0) >=
+                          (availability[it.productId || it.id || ""] ?? 999)
+                        }
                         onClick={() => setQty(idx, (it.qty || 1) + 1)}
                       >
                         +
@@ -474,6 +633,13 @@ export default function CartPage() {
                     <div className="font-bold">
                       {formatMoney(Number(it.priceCents || 0) * Number(it.qty || 0))}
                     </div>
+                    {availability[it.productId || it.id || ""] !== undefined &&
+                      availability[it.productId || it.id || ""] <
+                        Number(it.qty || 0) && (
+                      <div className="text-xs font-bold text-red-700">
+                        Only {availability[it.productId || it.id || ""] ?? 0} available
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -483,24 +649,30 @@ export default function CartPage() {
           <div className="mt-6 border-t pt-4">
             <p className="mb-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-950">
               Payment follows each producer's preference. If every producer in the cart
-              accepts Stripe, you will continue to secure online checkout. Otherwise,
-              place the order now and arrange payment directly at pickup or delivery.
+              accepts Stripe, you will continue to secure online checkout and see the
+              card-processing fee before payment. Otherwise, place the order now and
+              arrange payment directly at pickup or delivery. Maine Farm Market charges
+              no platform commission on product sales.
             </p>
             <div className="font-bold mb-2">Delivery / Pickup</div>
             <div className="flex gap-2">
               <button
                 onClick={() => setDeliveryMethod("pickup")}
+                disabled={!allPickupAvailable}
+                aria-pressed={deliveryMethod === "pickup"}
                 className={`px-4 py-2 rounded-lg font-bold ${
                   deliveryMethod === "pickup" ? "bg-black text-white" : "bg-stone-100"
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 Pickup
               </button>
               <button
                 onClick={() => setDeliveryMethod("delivery")}
+                disabled={!allDeliveryAvailable}
+                aria-pressed={deliveryMethod === "delivery"}
                 className={`px-4 py-2 rounded-lg font-bold ${
                   deliveryMethod === "delivery" ? "bg-black text-white" : "bg-stone-100"
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 Delivery
               </button>
@@ -510,6 +682,12 @@ export default function CartPage() {
                 ? "Pickup must be scheduled at least 1 hour in advance."
                 : "Delivery must be scheduled at least 24 hours in advance."}
             </p>
+            {!allDeliveryAvailable && cart.items.length > 0 && (
+              <p className="mt-2 text-sm text-amber-800">
+                Delivery is unavailable because at least one producer in this cart only
+                offers pickup.
+              </p>
+            )}
 
             <div className="mt-3">
               <div className="text-sm font-bold mb-1">
@@ -558,7 +736,10 @@ export default function CartPage() {
                 isLoading ||
                 !scheduledDate?.trim() ||
                 !scheduledTime?.trim() ||
-                !schedulingValid
+                !schedulingValid ||
+                (deliveryMethod === "pickup"
+                  ? !allPickupAvailable
+                  : !allDeliveryAvailable)
               }
               onClick={startCheckout}
               className={`mt-4 w-full py-3 rounded-xl font-extrabold ${
@@ -566,7 +747,10 @@ export default function CartPage() {
                 isLoading ||
                 !scheduledDate?.trim() ||
                 !scheduledTime?.trim() ||
-                !schedulingValid
+                !schedulingValid ||
+                (deliveryMethod === "pickup"
+                  ? !allPickupAvailable
+                  : !allDeliveryAvailable)
                   ? "bg-stone-200"
                   : "bg-black text-white"
               }`}

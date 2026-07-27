@@ -15,8 +15,8 @@ import BuyerOrdersPage from "./pages/BuyerOrdersPage";
 import ContactPage from "./pages/ContactPage";
 import AccountPage from "./pages/AccountPage";
 
-import { auth, db, functions } from './firebase';
-import { GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithPopup, signOut } from 'firebase/auth';
+import { auth, db, functions, isFirebaseEmulatorMode } from './firebase';
+import { GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { Capacitor } from '@capacitor/core';
@@ -158,6 +158,14 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
   const login = async (role?: UserRole) => {
     if (role) sessionStorage.setItem("mfm_intent_role", role);
+    if (isFirebaseEmulatorMode) {
+      const email =
+        role === UserRole.PRODUCER
+          ? "producer-test@mainefarmmarket.local"
+          : "buyer-test@mainefarmmarket.local";
+      await signInWithEmailAndPassword(auth, email, "MfmEmulatorTest2026!");
+      return;
+    }
     if (Capacitor.isNativePlatform()) {
       const result = await FirebaseAuthentication.signInWithGoogle({
         skipNativeAuth: true,
@@ -189,13 +197,70 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   );
 };
 
-// --- Protected Route ---
-const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+type ProtectedRouteProps = {
+  children: React.ReactNode;
+  role?: UserRole;
+  requireBuyerReady?: boolean;
+  requireProducerTerms?: boolean;
+  requireProducerSetup?: boolean;
+  requireProducerSubscription?: boolean;
+};
+
+// Enforces the same account milestones used by the subscription gate so a
+// bookmarked URL cannot bypass agreements, setup, or producer billing.
+const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
+  children,
+  role,
+  requireBuyerReady = false,
+  requireProducerTerms = false,
+  requireProducerSetup = false,
+  requireProducerSubscription = false,
+}) => {
   const { user, loading } = useAuth();
   const location = useLocation();
 
-  if (loading) return <div className="p-6">Loading...</div>;
+  if (loading) {
+    return (
+      <div className="min-h-[40vh] grid place-items-center text-stone-600">
+        Loading your Maine Farm Market account…
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/" replace state={{ from: location }} />;
+  if (role && user.role !== role) {
+    return <Navigate to="/start-subscription" replace />;
+  }
+  if (requireBuyerReady && user.role === UserRole.BUYER) {
+    if (!user.userAgreementAcceptedAt) {
+      return <Navigate to="/agreement" replace />;
+    }
+    if (!user.buyerProfileComplete) {
+      return <Navigate to="/onboarding" replace />;
+    }
+  }
+  if (
+    (requireProducerTerms || requireProducerSetup || requireProducerSubscription) &&
+    user.role === UserRole.PRODUCER
+  ) {
+    if (
+      user.producerTermsVersion !== PRODUCER_TERMS_VERSION ||
+      !user.producerTermsAcceptedAt
+    ) {
+      return <Navigate to="/producer/terms" replace />;
+    }
+    if (
+      (requireProducerSetup || requireProducerSubscription) &&
+      !user.producerOnboardingComplete
+    ) {
+      return <Navigate to="/producer/setup" replace />;
+    }
+    if (
+      requireProducerSubscription &&
+      user.subscriptionStatus !== SubscriptionStatus.ACTIVE
+    ) {
+      return <Navigate to="/start-subscription" replace />;
+    }
+  }
 
   return <>{children}</>;
 };
@@ -537,12 +602,12 @@ const Header = () => {
 
   return (
     <header className="bg-white/70 backdrop-blur border-b border-stone-200 sticky top-0 z-50">
-      <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col items-center">
-        <Link to="/" className="block">
-          <img src="/mfm-logo.png" alt="Maine Farm Market" className="h-20 md:h-24 object-contain" />
+      <div className="max-w-7xl mx-auto px-4 py-2 flex flex-wrap items-center justify-between gap-3">
+        <Link to="/" className="shrink-0">
+          <img src="/mfm-logo.png" alt="Maine Farm Market" className="h-14 md:h-16 w-auto object-contain" />
         </Link>
 
-        <div className="w-full flex justify-between items-center gap-3 mt-2">
+        <div className="flex flex-1 flex-wrap justify-end items-center gap-3">
           <div className="flex items-center gap-3">
             <Link to="/contact" className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
               Contact
@@ -579,7 +644,9 @@ const Header = () => {
               </button>
             </div>
           ) : (
-            <div className="h-6" />
+            <Link to="/" className="rounded-lg bg-emerald-800 px-4 py-2 text-sm font-bold text-white">
+              Sign in
+            </Link>
           )}
         </div>
       </div>
@@ -618,7 +685,7 @@ export default function App() {
           <Route
             path="/onboarding"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute role={UserRole.BUYER}>
                 <OnboardingPage />
               </ProtectedRoute>
             }
@@ -627,7 +694,7 @@ export default function App() {
           <Route
             path="/agreement"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute role={UserRole.BUYER}>
                 <UserAgreementPage />
               </ProtectedRoute>
             }
@@ -636,7 +703,7 @@ export default function App() {
           <Route
             path="/subscribe-success"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute role={UserRole.PRODUCER}>
                 <SubscribeSuccess />
               </ProtectedRoute>
             }
@@ -647,7 +714,7 @@ export default function App() {
           <Route
             path="/buyer"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute role={UserRole.BUYER} requireBuyerReady>
                 <BuyerDashboard />
               </ProtectedRoute>
             }
@@ -656,7 +723,7 @@ export default function App() {
           <Route
             path="/buyer/orders"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute role={UserRole.BUYER} requireBuyerReady>
                 <BuyerOrdersPage />
               </ProtectedRoute>
             }
@@ -665,7 +732,10 @@ export default function App() {
           <Route
             path="/producer"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute
+                role={UserRole.PRODUCER}
+                requireProducerSubscription
+              >
                 <ProducerDashboard />
               </ProtectedRoute>
             }
@@ -674,7 +744,7 @@ export default function App() {
           <Route
             path="/producer/terms"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute role={UserRole.PRODUCER}>
                 <ProducerTermsPage />
               </ProtectedRoute>
             }
@@ -683,7 +753,7 @@ export default function App() {
           <Route
             path="/producer/setup"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute role={UserRole.PRODUCER} requireProducerTerms>
                 <ProducerOnboardingPage />
               </ProtectedRoute>
             }
@@ -697,7 +767,10 @@ export default function App() {
           <Route
             path="/producer/payouts"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute
+                role={UserRole.PRODUCER}
+                requireProducerSetup
+              >
                 <StripePayoutPage />
               </ProtectedRoute>
             }
@@ -706,7 +779,7 @@ export default function App() {
           <Route
             path="/cart"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute role={UserRole.BUYER} requireBuyerReady>
                 <CartPage />
               </ProtectedRoute>
             }

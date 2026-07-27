@@ -17,10 +17,9 @@ import org.junit.runner.RunWith;
 public class ExampleInstrumentedTest {
 
     @Test
-    public void useAppContext() throws Exception {
-        // Context of the app under test.
+    public void installedApplicationUsesMaineFarmMarketPackage() {
         Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
 
-        assertEquals("com.mainefarmmarket.app", appContext.getPackageName());
+        assertEquals(MarketplaceConfig.PACKAGE_NAME, appContext.getPackageName());
     }
 }

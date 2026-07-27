@@ -3,7 +3,7 @@ export const APP_NAME = "Maine Farm Market";
 export const MAINE_STATE = "ME";
 
 export const PRICING = {
-  PRODUCER: 30
+  PRODUCER: 29.99
 };
 
 export const CATEGORIES = [

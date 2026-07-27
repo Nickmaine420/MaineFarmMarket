@@ -16,6 +16,7 @@ export default function AccountPage() {
   const [blockedAccounts, setBlockedAccounts] = useState<BlockedAccount[]>([]);
   const [confirmation, setConfirmation] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -47,6 +48,7 @@ export default function AccountPage() {
     }
 
     setDeleting(true);
+    setErrorMessage("");
     try {
       const requestDeletion = httpsCallable<Record<string, never>, { deleted: boolean }>(
         functions,
@@ -60,7 +62,7 @@ export default function AccountPage() {
       navigate("/", { replace: true });
     } catch (error: any) {
       console.error("Account deletion failed:", error);
-      alert(
+      setErrorMessage(
         error?.message ||
           "We could not delete your account. Contact mainefarmmarket@gmail.com for help."
       );
@@ -116,6 +118,11 @@ export default function AccountPage() {
             for up to seven years and are disconnected from your public profile where
             practical.
           </p>
+          {errorMessage && (
+            <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-900">
+              {errorMessage}
+            </p>
+          )}
           <label className="mt-4 block text-sm font-bold text-stone-900">
             Type DELETE to confirm
             <input

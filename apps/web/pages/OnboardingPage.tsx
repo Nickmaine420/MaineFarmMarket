@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { auth, db } from "../firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
+import { isMaineZip } from "../utils/validation";
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
@@ -12,6 +13,7 @@ export default function OnboardingPage() {
   const [city, setCity] = useState("");
   const [zip, setZip] = useState("");
   const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const localDoneKey = user ? `buyer_onboarding_done_${user.uid}` : "";
 
@@ -22,13 +24,7 @@ export default function OnboardingPage() {
         return;
       }
 
-      // If local says onboarding is done, skip immediately
-      if (localDoneKey && localStorage.getItem(localDoneKey) === "true") {
-        navigate("/buyer", { replace: true });
-        return;
-      }
-
-      // Otherwise check Firestore profile flag
+      // Firestore is authoritative; local state never bypasses account setup.
       const ref = doc(db, "users", user.uid);
       const snap = await getDoc(ref);
 
@@ -58,8 +54,9 @@ export default function OnboardingPage() {
     if (!user) return;
 
     const trimmedZip = zip.trim();
-    if (trimmedZip.length < 5) {
-      alert("Please enter a valid Maine zip code.");
+    setErrorMessage("");
+    if (!isMaineZip(trimmedZip)) {
+      setErrorMessage("Please enter a valid Maine ZIP code.");
       return;
     }
 
@@ -80,6 +77,9 @@ export default function OnboardingPage() {
 
       localStorage.setItem(localDoneKey, "true");
       navigate("/buyer", { replace: true });
+    } catch (error) {
+      console.error(error);
+      setErrorMessage("We could not save your buyer profile. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -107,8 +107,14 @@ export default function OnboardingPage() {
       <div style={{ border: "1px solid #ddd", borderRadius: 14, padding: 16, background: "#fff" }}>
         <h2 style={{ marginTop: 0 }}>Welcome to Maine Farm Market</h2>
         <p style={{ color: "#555" }}>
-          We need to verify your Maine location to ensure a local-only marketplace.
+          Add your Maine location so producers can plan pickup or delivery. Your
+          street address stays in your private account profile.
         </p>
+        {errorMessage && (
+          <div role="alert" style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: "#fef2f2", color: "#7f1d1d" }}>
+            {errorMessage}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10 }}>
           <label style={{ fontWeight: 700 }}>Mailing Address</label>
@@ -116,6 +122,7 @@ export default function OnboardingPage() {
             value={mailingAddress}
             onChange={(e) => setMailingAddress(e.target.value)}
             placeholder="123 Farm Way"
+            autoComplete="street-address"
             style={{ padding: "12px 12px", borderRadius: 10, border: "1px solid #ddd" }}
             required
             disabled={saving}
@@ -128,6 +135,7 @@ export default function OnboardingPage() {
                 value={city}
                 onChange={(e) => setCity(e.target.value)}
                 placeholder="Portland"
+                autoComplete="address-level2"
                 style={{ padding: "12px 12px", borderRadius: 10, border: "1px solid #ddd", width: "100%" }}
                 required
                 disabled={saving}
@@ -155,6 +163,9 @@ export default function OnboardingPage() {
             value={zip}
             onChange={(e) => setZip(e.target.value)}
             placeholder="04101"
+            inputMode="numeric"
+            autoComplete="postal-code"
+            maxLength={10}
             style={{ padding: "12px 12px", borderRadius: 10, border: "1px solid #ddd" }}
             required
             disabled={saving}

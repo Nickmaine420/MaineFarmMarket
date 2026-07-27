@@ -24,7 +24,6 @@ import java.util.List;
 
 @CapacitorPlugin(name = "PlayBilling")
 public class PlayBillingPlugin extends Plugin implements PurchasesUpdatedListener {
-    private static final String PACKAGE_NAME = "com.mainefarmmarket.app";
     private BillingClient billingClient;
     private PluginCall pendingPurchaseCall;
 
@@ -157,8 +156,8 @@ public class PlayBillingPlugin extends Plugin implements PurchasesUpdatedListene
     public void purchaseSubscription(PluginCall call) {
         String productId = call.getString("productId");
         String obfuscatedAccountId = call.getString("obfuscatedAccountId");
-        if (productId == null || productId.isBlank()) {
-            call.reject("productId is required");
+        if (!MarketplaceConfig.isConfiguredProducerSubscription(productId)) {
+            call.reject("The requested subscription product is not configured");
             return;
         }
         if (obfuscatedAccountId == null || obfuscatedAccountId.isBlank()) {
@@ -239,7 +238,7 @@ public class PlayBillingPlugin extends Plugin implements PurchasesUpdatedListene
         String productId = call.getString("productId");
         Uri.Builder uri = Uri.parse("https://play.google.com/store/account/subscriptions")
             .buildUpon()
-            .appendQueryParameter("package", PACKAGE_NAME);
+            .appendQueryParameter("package", MarketplaceConfig.PACKAGE_NAME);
         if (productId != null && !productId.isBlank()) {
             uri.appendQueryParameter("sku", productId);
         }

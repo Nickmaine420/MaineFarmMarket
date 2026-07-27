@@ -11,6 +11,7 @@ export default function ProducerTermsPage() {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [acceptedSafetyPromise, setAcceptedSafetyPromise] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   if (loading) return <div className="p-6">Loading…</div>;
   if (!user) return <Navigate to="/" replace />;
@@ -23,6 +24,7 @@ export default function ProducerTermsPage() {
 
   const accept = async () => {
     if (!acceptedTerms || !acceptedSafetyPromise || saving) return;
+    setErrorMessage("");
     setSaving(true);
     try {
       await setDoc(
@@ -43,7 +45,7 @@ export default function ProducerTermsPage() {
       navigate("/producer/setup", { replace: true });
     } catch (error) {
       console.error("Producer terms acceptance failed:", error);
-      alert("We could not record your acceptance. Please try again.");
+      setErrorMessage("We could not record your acceptance. Please try again.");
       setSaving(false);
     }
   };
@@ -58,6 +60,11 @@ export default function ProducerTermsPage() {
           <h1 className="mt-2 text-3xl font-bold text-stone-900">{PRODUCER_TERMS_TITLE}</h1>
           <p className="mt-2 text-sm text-stone-600">Terms version {PRODUCER_TERMS_VERSION}</p>
         </div>
+        {errorMessage && (
+          <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+            {errorMessage}
+          </div>
+        )}
 
         <div className="max-h-[52vh] space-y-5 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-5">
           {PRODUCER_TERMS_SECTIONS.map((section, index) => (
@@ -112,4 +119,3 @@ export default function ProducerTermsPage() {
     </main>
   );
 }
-

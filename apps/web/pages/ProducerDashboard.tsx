@@ -10,7 +10,6 @@ import {
   onSnapshot,
   query,
   where,
-  deleteDoc,
   doc,
   updateDoc,
   serverTimestamp,
@@ -32,8 +31,12 @@ type Product = {
   quantityAvailable?: number;
   inStock?: boolean;
   producerUid?: string;
+  producerId?: string;
+  ownerId?: string;
+  priceCents?: number;
   producerName?: string;
   imageUrl?: string;
+  archived?: boolean;
   createdAt?: any;
 };
 
@@ -83,6 +86,8 @@ type OrderDoc = {
   deliveryTime?: string;
   notes?: string;
   fulfillment?: Fulfillment;
+  paymentMode?: "direct" | "stripe";
+  paymentStatus?: string;
 };
 
 function formatWhen(ts: any): string {
@@ -110,6 +115,11 @@ const ProducerDashboard = () => {
   const [editQty, setEditQty] = useState('');
   const [editUnit, setEditUnit] = useState('each');
   const [savingEdit, setSavingEdit] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<Product | null>(null);
+  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<
+    { tone: "success" | "error" | "info"; message: string } | null
+  >(null);
 
   useEffect(() => {
     if (!user) return;
@@ -145,7 +155,9 @@ const ProducerDashboard = () => {
 
   const stats = useMemo(() => {
     const inStockCount = products.filter(p => p.inStock !== false).length;
-    const newOrders = orders.filter(o => o.status === 'pending' || o.status === 'new').length;
+    const newOrders = orders.filter((order) =>
+      ["awaiting_payment", "paid", "pending", "new"].includes(order.status)
+    ).length;
     return { total: products.length, inStockCount, newOrders };
   }, [products, orders]);
 
@@ -165,50 +177,108 @@ const ProducerDashboard = () => {
   const saveEdit = async () => {
     if (!user || !editing) return;
     const title = editTitle.trim();
-    if (!title) return alert("Enter a product name.");
+    if (!title) {
+      setNotice({ tone: "error", message: "Enter a product name." });
+      return;
+    }
 
     const priceNum = Number(editPrice);
-    if (!Number.isFinite(priceNum) || priceNum < 0) return alert("Enter a valid price.");
+    if (!Number.isFinite(priceNum) || priceNum <= 0) {
+      setNotice({ tone: "error", message: "Enter a price greater than $0." });
+      return;
+    }
 
     const qtyNum = Number(editQty);
-    if (!Number.isFinite(qtyNum) || qtyNum < 0) return alert("Enter a valid quantity.");
+    if (!Number.isInteger(qtyNum) || qtyNum < 0) {
+      setNotice({ tone: "error", message: "Quantity must be a whole number of 0 or more." });
+      return;
+    }
 
     try {
       setSavingEdit(true);
       await updateDoc(doc(db, 'products', editing.id), {
         title,
         price: priceNum,
+        priceCents: Math.round(priceNum * 100),
         quantityAvailable: qtyNum,
         unit: editUnit,
         inStock: qtyNum > 0,
+        archived: false,
+        producerUid: user.uid,
+        producerId: user.uid,
+        ownerId: user.uid,
         updatedAt: serverTimestamp(),
       });
+      setNotice({ tone: "success", message: "Listing updated." });
       closeEdit();
     } catch (e) {
       console.error(e);
-      alert("Could not save changes — check console");
+      setNotice({ tone: "error", message: "Could not save the listing. Please try again." });
       setSavingEdit(false);
     }
   };
 
-  const deleteListing = async (p: Product) => {
-    if (!confirm(`Delete "${p.title}"? This cannot be undone.`)) return;
+  const archiveListing = async (p: Product) => {
     try {
-      await deleteDoc(doc(db, 'products', p.id));
+      await updateDoc(doc(db, "products", p.id), {
+        producerUid: user?.uid,
+        producerId: user?.uid,
+        ownerId: user?.uid,
+        priceCents: p.priceCents ?? Math.round(Number(p.price || 0) * 100),
+        quantityAvailable: Math.max(0, Math.trunc(Number(p.quantityAvailable || 0))),
+        archived: true,
+        inStock: false,
+        archivedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setArchiveTarget(null);
+      setNotice({
+        tone: "success",
+        message: `"${p.title || "Listing"}" was archived. Its data is preserved.`,
+      });
     } catch (e) {
       console.error(e);
-      alert("Could not delete — check console");
+      setNotice({ tone: "error", message: "Could not archive the listing. Please try again." });
+    }
+  };
+
+  const restoreListing = async (p: Product) => {
+    try {
+      await updateDoc(doc(db, "products", p.id), {
+        producerUid: user?.uid,
+        producerId: user?.uid,
+        ownerId: user?.uid,
+        priceCents: p.priceCents ?? Math.round(Number(p.price || 0) * 100),
+        quantityAvailable: Math.max(0, Math.trunc(Number(p.quantityAvailable || 0))),
+        archived: false,
+        inStock: Number(p.quantityAvailable || 0) > 0,
+        updatedAt: serverTimestamp(),
+      });
+      setNotice({ tone: "success", message: `"${p.title || "Listing"}" was restored.` });
+    } catch (error) {
+      console.error(error);
+      setNotice({ tone: "error", message: "Could not restore the listing. Please try again." });
     }
   };
 
   const setOrderStatus = async (orderId: string, status: string) => {
     if (!user) return;
     try {
-      const producerOrderRef = doc(db, 'producerOrders', user.uid, 'orders', orderId);
-      await updateDoc(producerOrderRef, { status, updatedAt: serverTimestamp() });
-    } catch (e) {
+      setPendingOrderId(orderId);
+      const updateStatus = httpsCallable<
+        { orderId: string; status: string },
+        { orderId: string; producerStatus: string; orderStatus: string }
+      >(functions, "updateProducerOrderStatus");
+      await updateStatus({ orderId, status });
+      setNotice({ tone: "success", message: `Order marked ${status.replaceAll("_", " ")}.` });
+    } catch (e: unknown) {
       console.error(e);
-      alert("Could not update order — check console");
+      setNotice({
+        tone: "error",
+        message: e instanceof Error ? e.message : "Could not update the order.",
+      });
+    } finally {
+      setPendingOrderId(null);
     }
   };
 
@@ -229,10 +299,13 @@ const ProducerDashboard = () => {
       const result = await createPortalSession({});
       const url = result?.data?.url;
       if (url) window.location.href = url;
-      else alert('Could not open subscription management.');
+      else setNotice({ tone: "error", message: "Could not open subscription management." });
     } catch (e: unknown) {
       console.error(e);
-      alert(e instanceof Error ? e.message : 'Could not open subscription management.');
+      setNotice({
+        tone: "error",
+        message: e instanceof Error ? e.message : "Could not open subscription management.",
+      });
     } finally {
       setPortalLoading(false);
     }
@@ -247,7 +320,8 @@ const ProducerDashboard = () => {
 
     let when = "";
     if (o.scheduledAt && String(o.scheduledAt).trim()) {
-      when = String(o.scheduledAt).trim();
+      const parsed = new Date(String(o.scheduledAt).trim());
+      when = Number.isNaN(parsed.getTime()) ? String(o.scheduledAt).trim() : parsed.toLocaleString();
     } else if (o.pickupDate || o.pickupTime) {
       when = [o.pickupDate, o.pickupTime].filter(Boolean).join(" ");
     } else if (o.deliveryDate || o.deliveryTime) {
@@ -255,7 +329,10 @@ const ProducerDashboard = () => {
     } else if (o.fulfillment?.scheduledFor) {
       when = formatWhen(o.fulfillment.scheduledFor);
     } else if (o.fulfillment?.scheduledAt && String(o.fulfillment.scheduledAt).trim()) {
-      when = String(o.fulfillment.scheduledAt).trim();
+      const parsed = new Date(String(o.fulfillment.scheduledAt).trim());
+      when = Number.isNaN(parsed.getTime())
+        ? String(o.fulfillment.scheduledAt).trim()
+        : parsed.toLocaleString();
     } else if (o.fulfillment?.window) {
       const w = o.fulfillment.window;
       if (w.label) when = w.label;
@@ -266,6 +343,43 @@ const ProducerDashboard = () => {
 
     const notes = (o.fulfillment?.notes ?? o.notes ?? "").trim();
     return { label, when, notes };
+  };
+
+  const orderActions = (order: OrderDoc) => {
+    const status = String(order.status || "").toLowerCase();
+    const actions: Array<{ status: string; label: string; className: string }> = [];
+    if (["awaiting_payment", "paid", "pending", "new"].includes(status)) {
+      actions.push({
+        status: "accepted",
+        label: "Accept",
+        className: "bg-stone-100 hover:bg-stone-200",
+      });
+    }
+    if (status === "accepted") {
+      actions.push({
+        status: "ready",
+        label: "Ready",
+        className: "bg-green-100 text-green-800 hover:bg-green-200",
+      });
+    }
+    if (status === "ready") {
+      actions.push({
+        status: "completed",
+        label: "Complete",
+        className: "bg-[#2f4a2e] text-white hover:opacity-90",
+      });
+    }
+    if (
+      order.paymentMode !== "stripe" &&
+      ["awaiting_payment", "pending", "new", "accepted", "ready"].includes(status)
+    ) {
+      actions.push({
+        status: "cancelled",
+        label: "Cancel",
+        className: "bg-red-100 text-red-800 hover:bg-red-200",
+      });
+    }
+    return actions;
   };
 
   if (!user) return <div className="p-6">Please sign in.</div>;
@@ -311,6 +425,21 @@ const ProducerDashboard = () => {
         </div>
       </div>
 
+      {notice && (
+        <div
+          role={notice.tone === "error" ? "alert" : "status"}
+          className={`mb-6 rounded-xl border px-4 py-3 text-sm ${
+            notice.tone === "error"
+              ? "border-red-200 bg-red-50 text-red-900"
+              : notice.tone === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                : "border-blue-200 bg-blue-50 text-blue-900"
+          }`}
+        >
+          {notice.message}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
         <div className="lg:col-span-1 space-y-2">
           <button onClick={() => setView('overview')} className={`w-full text-left px-6 py-4 rounded-xl font-semibold transition ${view === 'overview' ? 'bg-green-100 text-green-800' : 'text-stone-600 hover:bg-stone-100'}`}>Dashboard</button>
@@ -345,14 +474,30 @@ const ProducerDashboard = () => {
                     // ✅ Key fix: stack on mobile to prevent cramping/overlap
                     <div key={p.id} className="border rounded-xl p-4 flex flex-col sm:flex-row gap-4 sm:items-center">
                       {/* ✅ Image becomes full-width on mobile so content has room */}
-                      <img
-                        src={p.imageUrl || "https://via.placeholder.com/120x90?text=No+Photo"}
-                        alt={p.title || "Product"}
-                        className="w-full sm:w-28 h-44 sm:h-20 object-cover rounded-lg border"
-                      />
+                      {p.imageUrl ? (
+                        <img
+                          src={p.imageUrl}
+                          alt={p.title || "Product"}
+                          className="w-full sm:w-28 h-44 sm:h-20 object-cover rounded-lg border"
+                        />
+                      ) : (
+                        <div
+                          aria-label="No product photo"
+                          className="grid h-44 w-full place-items-center rounded-lg border bg-stone-100 text-xs font-semibold text-stone-500 sm:h-20 sm:w-28"
+                        >
+                          No photo
+                        </div>
+                      )}
 
                       <div className="flex-1 min-w-0">
-                        <div className="font-bold text-stone-900 text-lg truncate">{p.title}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="font-bold text-stone-900 text-lg truncate">{p.title}</div>
+                          {p.archived && (
+                            <span className="rounded-full bg-stone-200 px-2 py-0.5 text-xs font-semibold text-stone-700">
+                              Archived
+                            </span>
+                          )}
+                        </div>
                         <div className="text-stone-600">
                           {(p.department || 'Other')}{p.category ? ` • ${p.category}` : ''} • ${Number(p.price ?? 0).toFixed(2)} / {p.unit || 'each'} • Qty: {p.quantityAvailable ?? 0}
                         </div>
@@ -366,12 +511,21 @@ const ProducerDashboard = () => {
                         >
                           Edit
                         </button>
-                        <button
-                          onClick={() => deleteListing(p)}
-                          className="px-4 py-2 rounded-xl bg-red-100 text-red-800 hover:bg-red-200 font-semibold flex-1 sm:flex-none min-w-[110px]"
-                        >
-                          Delete
-                        </button>
+                        {p.archived ? (
+                          <button
+                            onClick={() => restoreListing(p)}
+                            className="px-4 py-2 rounded-xl bg-emerald-100 text-emerald-900 hover:bg-emerald-200 font-semibold flex-1 sm:flex-none min-w-[110px]"
+                          >
+                            Restore
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setArchiveTarget(p)}
+                            className="px-4 py-2 rounded-xl bg-amber-100 text-amber-900 hover:bg-amber-200 font-semibold flex-1 sm:flex-none min-w-[110px]"
+                          >
+                            Archive
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -405,12 +559,24 @@ const ProducerDashboard = () => {
                             <div className="text-stone-600 text-sm">
                               Total: <b>${totalDisplay}</b>
                             </div>
+                            {o.paymentMode === "direct" && (
+                              <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                Arrange payment directly with the buyer before fulfillment.
+                              </div>
+                            )}
                           </div>
                           <div className="flex gap-2 flex-wrap">
-                            <button onClick={() => setOrderStatus(orderId, "accepted")} className="px-3 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 font-semibold">Accept</button>
-                            <button onClick={() => setOrderStatus(orderId, "ready")} className="px-3 py-2 rounded-xl bg-green-100 text-green-800 hover:bg-green-200 font-semibold">Ready</button>
-                            <button onClick={() => setOrderStatus(orderId, "completed")} className="px-3 py-2 rounded-xl bg-[#2f4a2e] text-white hover:opacity-90 font-semibold">Complete</button>
-                            <button onClick={() => setOrderStatus(orderId, "cancelled")} className="px-3 py-2 rounded-xl bg-red-100 text-red-800 hover:bg-red-200 font-semibold">Cancel</button>
+                            {orderActions(o).map((action) => (
+                              <button
+                                key={action.status}
+                                type="button"
+                                onClick={() => setOrderStatus(orderId, action.status)}
+                                disabled={pendingOrderId === orderId}
+                                className={`px-3 py-2 rounded-xl font-semibold disabled:cursor-wait disabled:opacity-50 ${action.className}`}
+                              >
+                                {pendingOrderId === orderId ? "Updating…" : action.label}
+                              </button>
+                            ))}
                           </div>
                         </div>
 
@@ -462,11 +628,11 @@ const ProducerDashboard = () => {
       </div>
 
       {editing && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6">
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" role="presentation">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6" role="dialog" aria-modal="true" aria-labelledby="edit-listing-title">
             <div className="flex items-center justify-between mb-4">
-              <div className="text-xl font-bold">Edit Listing</div>
-              <button onClick={closeEdit} className="text-stone-500 font-bold">✕</button>
+              <div id="edit-listing-title" className="text-xl font-bold">Edit Listing</div>
+              <button type="button" onClick={closeEdit} aria-label="Close edit listing" className="text-stone-500 font-bold">×</button>
             </div>
 
             <label className="block text-sm font-semibold mb-1">Product name</label>
@@ -502,6 +668,42 @@ const ProducerDashboard = () => {
               <button onClick={closeEdit} className="px-4 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 font-semibold">Cancel</button>
               <button onClick={saveEdit} disabled={savingEdit} className="px-4 py-2 rounded-xl bg-[#2f4a2e] text-white hover:opacity-90 font-semibold disabled:opacity-60">
                 {savingEdit ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {archiveTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="presentation">
+          <div
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="archive-listing-title"
+          >
+            <h3 id="archive-listing-title" className="text-xl font-bold">
+              Archive this listing?
+            </h3>
+            <p className="mt-2 text-sm text-stone-600">
+              “{archiveTarget.title || "This listing"}” will be hidden from buyers.
+              Its product information and order history will be preserved, and you
+              can restore it later.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setArchiveTarget(null)}
+                className="rounded-xl bg-stone-100 px-4 py-2 font-semibold hover:bg-stone-200"
+              >
+                Keep active
+              </button>
+              <button
+                type="button"
+                onClick={() => archiveListing(archiveTarget)}
+                className="rounded-xl bg-amber-600 px-4 py-2 font-semibold text-white hover:bg-amber-700"
+              >
+                Archive listing
               </button>
             </div>
           </div>

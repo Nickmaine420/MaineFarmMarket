@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../App";
 import { db } from "../firebase";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { deleteField, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { hasUsPhoneNumber, isMaineZip } from "../utils/validation";
 
 type FarmDoc = {
   producerUid: string;
   farmName: string;
   phone: string;
-  addressLine1: string;
   city: string;
   state: string;
   zip: string;
@@ -38,6 +38,9 @@ export default function FarmProfilePage() {
   const [deliveryNotes, setDeliveryNotes] = useState("");
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
+  const [notice, setNotice] = useState<
+    { tone: "success" | "error" | "info"; message: string } | null
+  >(null);
 
   useEffect(() => {
     if (!user) return;
@@ -45,25 +48,50 @@ export default function FarmProfilePage() {
     (async () => {
       try {
         setLoading(true);
-        const ref = doc(db, "farms", user.uid);
-        const snap = await getDoc(ref);
+        const [snap, userSnap] = await Promise.all([
+          getDoc(doc(db, "farms", user.uid)),
+          getDoc(doc(db, "users", user.uid)),
+        ]);
+        const privateProfile = userSnap.exists()
+          ? (userSnap.data() as any)?.producerPrivate || {}
+          : {};
         if (snap.exists()) {
           const d = snap.data() as FarmDoc;
           setFarmName(d.farmName || user.displayName || "Maine Farm");
           setPhone(d.phone || "");
-          setAddressLine1(d.addressLine1 || "");
+          setAddressLine1(
+            privateProfile.addressLine1 ||
+              (d as FarmDoc & { addressLine1?: string }).addressLine1 ||
+              ""
+          );
           setCity(d.city || "");
-          setState(d.state || "ME");
+          setState("ME");
           setZip(d.zip || "");
           setHours(d.hours || "");
           setPickupAvailable(d.pickupAvailable ?? true);
           setDeliveryAvailable(d.deliveryAvailable ?? false);
           setDeliveryNotes(d.deliveryNotes || "");
-          setLat(typeof d.lat === "number" ? d.lat : null);
-          setLng(typeof d.lng === "number" ? d.lng : null);
+          setLat(
+            typeof privateProfile.exactLocation?.lat === "number"
+              ? privateProfile.exactLocation.lat
+              : typeof d.lat === "number"
+                ? d.lat
+                : null
+          );
+          setLng(
+            typeof privateProfile.exactLocation?.lng === "number"
+              ? privateProfile.exactLocation.lng
+              : typeof d.lng === "number"
+                ? d.lng
+                : null
+          );
         } else {
           setFarmName(user.displayName || "Maine Farm");
+          setAddressLine1(privateProfile.addressLine1 || "");
         }
+      } catch (error) {
+        console.error(error);
+        setNotice({ tone: "error", message: "Could not load the farm profile." });
       } finally {
         setLoading(false);
       }
@@ -72,17 +100,24 @@ export default function FarmProfilePage() {
 
   const useMyLocation = () => {
     if (!navigator.geolocation) {
-      alert("Geolocation is not supported on this device/browser.");
+      setNotice({ tone: "error", message: "Location is not supported on this device." });
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setLat(Number(pos.coords.latitude.toFixed(6)));
         setLng(Number(pos.coords.longitude.toFixed(6)));
+        setNotice({
+          tone: "info",
+          message: "Location added. Buyers will only see an approximate location.",
+        });
       },
       (err) => {
         console.error(err);
-        alert("Could not get your location. Check browser permissions.");
+        setNotice({
+          tone: "error",
+          message: "Could not get your location. Check the app or browser permission.",
+        });
       },
       { enableHighAccuracy: true, timeout: 15000 }
     );
@@ -90,34 +125,65 @@ export default function FarmProfilePage() {
 
   const save = async () => {
     if (!user) return;
-    if (!farmName.trim()) return alert("Please enter your farm name.");
-    if (!city.trim()) return alert("Please enter your city.");
-    if (!state.trim()) return alert("Please enter your state (ME).");
+    setNotice(null);
+    if (!farmName.trim()) {
+      setNotice({ tone: "error", message: "Please enter your farm name." });
+      return;
+    }
+    if (!city.trim()) {
+      setNotice({ tone: "error", message: "Please enter your city." });
+      return;
+    }
+    if (!isMaineZip(zip)) {
+      setNotice({ tone: "error", message: "Enter a valid Maine ZIP code." });
+      return;
+    }
+    if (!hasUsPhoneNumber(phone)) {
+      setNotice({ tone: "error", message: "Enter a phone number buyers can use for fulfillment." });
+      return;
+    }
+    if (!pickupAvailable && !deliveryAvailable) {
+      setNotice({ tone: "error", message: "Choose pickup, delivery, or both." });
+      return;
+    }
 
     try {
       setSaving(true);
       const ref = doc(db, "farms", user.uid);
-      const payload: FarmDoc = {
+      const publicLat = lat == null ? null : Number(lat.toFixed(3));
+      const publicLng = lng == null ? null : Number(lng.toFixed(3));
+      const payload = {
         producerUid: user.uid,
         farmName: farmName.trim(),
         phone: phone.trim(),
-        addressLine1: addressLine1.trim(),
+        addressLine1: deleteField(),
         city: city.trim(),
-        state: state.trim().toUpperCase(),
+        state: "ME",
         zip: zip.trim(),
         hours: hours.trim(),
         pickupAvailable,
         deliveryAvailable,
         deliveryNotes: deliveryNotes.trim(),
-        lat,
-        lng,
+        lat: publicLat,
+        lng: publicLng,
         updatedAt: serverTimestamp(),
       };
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          producerPrivate: {
+            addressLine1: addressLine1.trim(),
+            exactLocation: lat == null || lng == null ? null : { lat, lng },
+            updatedAt: serverTimestamp(),
+          },
+        },
+        { merge: true }
+      );
       await setDoc(ref, payload, { merge: true });
-      alert("Farm profile saved.");
+      setNotice({ tone: "success", message: "Farm profile saved." });
     } catch (e) {
       console.error(e);
-      alert("Could not save farm profile — check console");
+      setNotice({ tone: "error", message: "Could not save the farm profile. Please try again." });
     } finally {
       setSaving(false);
     }
@@ -128,6 +194,25 @@ export default function FarmProfilePage() {
   return (
     <div className="bg-white rounded-2xl shadow p-8">
       <h3 className="text-2xl font-bold mb-4">Farm Profile</h3>
+      <p className="mb-4 text-sm text-stone-600">
+        City, phone, fulfillment options, and an approximate map location are shown
+        to buyers. Your street address is kept in your private account profile.
+      </p>
+
+      {notice && (
+        <div
+          role={notice.tone === "error" ? "alert" : "status"}
+          className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+            notice.tone === "error"
+              ? "border-red-200 bg-red-50 text-red-900"
+              : notice.tone === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                : "border-blue-200 bg-blue-50 text-blue-900"
+          }`}
+        >
+          {notice.message}
+        </div>
+      )}
 
       {loading ? (
         <div className="text-stone-500">Loading…</div>
@@ -136,32 +221,32 @@ export default function FarmProfilePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-semibold mb-1">Farm name</label>
-              <input className="border p-2 w-full rounded" value={farmName} onChange={e=>setFarmName(e.target.value)} />
+              <input autoComplete="organization" className="border p-2 w-full rounded" value={farmName} onChange={e=>setFarmName(e.target.value)} />
             </div>
 
             <div>
               <label className="block text-sm font-semibold mb-1">Phone (for pickup/contact)</label>
-              <input className="border p-2 w-full rounded" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="207-555-1234" />
+              <input type="tel" autoComplete="tel" className="border p-2 w-full rounded" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="207-555-1234" />
             </div>
 
             <div>
-              <label className="block text-sm font-semibold mb-1">Address (optional)</label>
-              <input className="border p-2 w-full rounded" value={addressLine1} onChange={e=>setAddressLine1(e.target.value)} placeholder="123 Farm Rd" />
+              <label className="block text-sm font-semibold mb-1">Private street address (optional)</label>
+              <input autoComplete="street-address" className="border p-2 w-full rounded" value={addressLine1} onChange={e=>setAddressLine1(e.target.value)} placeholder="123 Farm Rd" />
             </div>
 
             <div>
               <label className="block text-sm font-semibold mb-1">City</label>
-              <input className="border p-2 w-full rounded" value={city} onChange={e=>setCity(e.target.value)} placeholder="Waterville" />
+              <input autoComplete="address-level2" className="border p-2 w-full rounded" value={city} onChange={e=>setCity(e.target.value)} placeholder="Waterville" />
             </div>
 
             <div>
               <label className="block text-sm font-semibold mb-1">State</label>
-              <input className="border p-2 w-full rounded" value={state} onChange={e=>setState(e.target.value)} />
+              <input readOnly aria-readonly="true" className="border bg-stone-100 p-2 w-full rounded" value={state} />
             </div>
 
             <div>
               <label className="block text-sm font-semibold mb-1">ZIP</label>
-              <input className="border p-2 w-full rounded" value={zip} onChange={e=>setZip(e.target.value)} placeholder="04901" />
+              <input inputMode="numeric" autoComplete="postal-code" maxLength={10} className="border p-2 w-full rounded" value={zip} onChange={e=>setZip(e.target.value)} placeholder="04901" />
             </div>
 
             <div className="md:col-span-2">
