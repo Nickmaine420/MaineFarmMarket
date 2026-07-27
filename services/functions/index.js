@@ -2,7 +2,13 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
-const admin = require("firebase-admin");
+const { initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const {
+  FieldValue,
+  Timestamp,
+  getFirestore,
+} = require("firebase-admin/firestore");
 const { createHash } = require("node:crypto");
 const { GoogleAuth } = require("google-auth-library");
 const {
@@ -12,9 +18,8 @@ const {
   validateScheduledAt,
 } = require("./marketplace");
 
-admin.initializeApp();
-const db = admin.firestore();
-const FieldValue = admin.firestore.FieldValue;
+initializeApp();
+const db = getFirestore();
 
 async function withStripeEventIdempotency(event, handler) {
   const eventId = event.id;
@@ -1076,7 +1081,7 @@ exports.createCartCheckoutSessionV2 = onCall(
         const orderRef = orders.doc();
         const orderId = orderRef.id;
         const transferGroup = `${transferGroupBase}_${orderId}`;
-        const reservationExpiresAt = admin.firestore.Timestamp.fromMillis(
+        const reservationExpiresAt = Timestamp.fromMillis(
           nowMs + TTL_MS + RESERVATION_RELEASE_GRACE_MS
         );
         await reserveInventoryInTransaction(tx, resolvedItems);
@@ -1567,7 +1572,7 @@ exports.deleteMyAccount = onCall(
       );
 
       try {
-        await admin.auth().deleteUser(uid);
+        await getAuth().deleteUser(uid);
       } catch (error) {
         if (error?.code !== "auth/user-not-found") throw error;
       }
