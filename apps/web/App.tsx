@@ -169,6 +169,11 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     if (Capacitor.isNativePlatform()) {
       const result = await FirebaseAuthentication.signInWithGoogle({
         skipNativeAuth: true,
+        // The Credential Manager path can fail before showing the account
+        // chooser on some Play-installed Samsung builds. Use the plugin's
+        // Google Play Services flow, which is supported across our Android
+        // device range and still returns the ID token needed by Firebase JS.
+        useCredentialManager: false,
       });
       const idToken = result.credential?.idToken;
       if (!idToken) throw new Error("Google Sign-In did not return an ID token.");
