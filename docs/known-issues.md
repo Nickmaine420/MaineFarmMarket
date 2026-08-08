@@ -22,3 +22,11 @@ Recorded during project organization on 2026-07-25:
   to avoid unexpectedly removing producer access.
 - The formerly deployed-only `getProducerPayoutStatus` function was restored to source
   on 2026-08-07 so future backend deployments remain reproducible.
+- Google Play accepted version 1.6 (version code 7) for Alpha closed-track review on
+  2026-08-07. The selected Maine Farm Market tester list contains 9 accounts; Google
+  Play requires at least 12 opted-in testers for the production-access requirement.
+- The `producer_monthly` subscription product exists, but Google Play Console returns
+  the generic message `Your changes couldn't be saved` when creating a United States
+  monthly base plan at USD 29.99. A clean second form, unique plan ID, active payments
+  profile, and valid monetization settings produced the same server-side result. The
+  subscription therefore remains unavailable until Google accepts a base plan.
