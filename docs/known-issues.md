@@ -20,6 +20,5 @@ Recorded during project organization on 2026-07-25:
 - Two producer documents report an active subscription even though their referenced
   Stripe subscriptions are canceled. They were not changed during the buyer cleanup
   to avoid unexpectedly removing producer access.
-- The deployed `getProducerPayoutStatus` function is not present in the organized source
-  or saved project backups. It was preserved in production by deploying only the named
-  functions that are represented in this repository.
+- The formerly deployed-only `getProducerPayoutStatus` function was restored to source
+  on 2026-08-07 so future backend deployments remain reproducible.

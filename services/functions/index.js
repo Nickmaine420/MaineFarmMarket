@@ -1758,6 +1758,55 @@ exports.createProducerOnboardingLink = onCall(
   }
 );
 
+// Returns the producer's optional Stripe Connect readiness without exposing
+// account credentials or granting access. Keeping this function in source
+// removes drift from the older deployed-only implementation.
+exports.getProducerPayoutStatus = onCall(
+  { secrets: [STRIPE_SECRET_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+
+    const producer = await getUserOrThrow(uid);
+    assertRole(producer, ["producer"]);
+    const accountId =
+      producer.stripeConnectAccountId || producer.stripeAccountId || "";
+
+    if (!String(accountId).startsWith("acct_")) {
+      return {
+        configured: false,
+        detailsSubmitted: false,
+        chargesEnabled: false,
+        payoutsEnabled: false,
+        ready: false,
+      };
+    }
+
+    try {
+      const account = await getStripe().accounts.retrieve(accountId);
+      const detailsSubmitted = account.details_submitted === true;
+      const chargesEnabled = account.charges_enabled === true;
+      const payoutsEnabled = account.payouts_enabled === true;
+      return {
+        configured: true,
+        detailsSubmitted,
+        chargesEnabled,
+        payoutsEnabled,
+        ready: detailsSubmitted && chargesEnabled && payoutsEnabled,
+      };
+    } catch (error) {
+      console.error("getProducerPayoutStatus error:", {
+        uid,
+        message: error?.message || String(error),
+      });
+      throw new HttpsError(
+        "unavailable",
+        "Stripe payout status is temporarily unavailable."
+      );
+    }
+  }
+);
+
 // ---------------------------
 // stripeWebhook
 // ✅ FIX: handle subscription checkouts AND orders

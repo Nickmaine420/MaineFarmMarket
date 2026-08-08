@@ -14,6 +14,7 @@ import CartPage from './pages/CartPage';
 import BuyerOrdersPage from "./pages/BuyerOrdersPage";
 import ContactPage from "./pages/ContactPage";
 import AccountPage from "./pages/AccountPage";
+import OrderSuccessPage from "./pages/OrderSuccessPage";
 
 import { auth, db, functions, isFirebaseEmulatorMode } from './firebase';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut } from 'firebase/auth';
@@ -749,6 +750,15 @@ export default function App() {
             element={
               <ProtectedRoute role={UserRole.BUYER} requireBuyerReady>
                 <BuyerOrdersPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/order-success"
+            element={
+              <ProtectedRoute role={UserRole.BUYER} requireBuyerReady>
+                <OrderSuccessPage />
               </ProtectedRoute>
             }
           />
