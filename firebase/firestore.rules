@@ -23,6 +23,8 @@ service cloud.firestore {
         && data.price > 0
         && data.priceCents is int
         && data.priceCents > 0
+        && data.price * 100 >= data.priceCents - 0.001
+        && data.price * 100 <= data.priceCents + 0.001
         && data.quantityAvailable is int
         && data.quantityAvailable >= 0
         && data.inStock is bool
@@ -73,6 +75,7 @@ service cloud.firestore {
         && request.resource.data.role in ["buyer", "producer"]
         && !request.resource.data.keys().hasAny([
           "subscription",
+          "subscriptionStatus",
           "stripeCustomerId",
           "stripeConnectAccountId",
           "stripeAccountId"
@@ -88,6 +91,7 @@ service cloud.firestore {
         )
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
           "subscription",
+          "subscriptionStatus",
           "stripeCustomerId",
           "stripeConnectAccountId",
           "stripeAccountId"
@@ -113,6 +117,13 @@ service cloud.firestore {
         && request.resource.data.listingId is string
         && request.resource.data.listingId.size() > 0
         && request.resource.data.reportedUserId is string
+        && exists(/databases/$(database)/documents/products/$(request.resource.data.listingId))
+        && (
+          get(/databases/$(database)/documents/products/$(request.resource.data.listingId)).data.producerId
+            == request.resource.data.reportedUserId
+          || get(/databases/$(database)/documents/products/$(request.resource.data.listingId)).data.producerUid
+            == request.resource.data.reportedUserId
+        )
         && request.resource.data.reason is string
         && request.resource.data.reason.size() > 0
         && request.resource.data.reason.size() <= 1000
@@ -173,6 +184,21 @@ service cloud.firestore {
     match /producerOrders/{producerId}/orders/{orderId} {
       allow read: if signedIn() && request.auth.uid == producerId;
       allow write: if false;
+    }
+
+    // Disputes, refunds, rate limits, and administration data are only handled
+    // by trusted Cloud Functions.
+    match /disputes/{document=**} {
+      allow read, write: if false;
+    }
+    match /refunds/{document=**} {
+      allow read, write: if false;
+    }
+    match /refund_requests/{document=**} {
+      allow read, write: if false;
+    }
+    match /order_rate_limits/{document=**} {
+      allow read, write: if false;
     }
   }
 }

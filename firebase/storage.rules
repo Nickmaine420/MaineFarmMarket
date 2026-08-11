@@ -1,10 +1,20 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function activeProducer(userId) {
+      let profile = firestore.get(/databases/(default)/documents/users/$(userId)).data;
+      return profile.role == "producer"
+        && profile.producerTerms.accepted == true
+        && profile.producerTerms.version == "2026-07-25"
+        && profile.producerOnboarding.completed == true
+        && profile.subscription.status in ["active", "trialing", "paid"];
+    }
+
     match /products/{userId}/{fileName} {
       allow read: if request.auth != null;
       allow create, update: if request.auth != null
         && request.auth.uid == userId
+        && activeProducer(userId)
         && request.resource.size <= 8 * 1024 * 1024
         && request.resource.contentType.matches('image/(jpeg|png|webp|heic|heif)');
       allow delete: if request.auth != null && request.auth.uid == userId;

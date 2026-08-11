@@ -60,6 +60,28 @@ Product orders may use optional Stripe Connect only when every producer in the c
 has opted in and completed payout setup; otherwise buyers arrange payment directly
 with the producers.
 
+Direct-payment orders use server-authoritative inventory reservations, verified-email
+checks, per-account rate limits, automatic expiration, and buyer cancellation before a
+producer accepts. Marketplace administrators can review listing reports and order
+disputes, issue idempotent Stripe refunds, and reconcile legacy Stripe producer
+subscriptions from the protected `/admin` route.
+
+## Validation
+
+Run the local release gates from the repository root:
+
+```powershell
+npm --prefix services/functions test
+npm --prefix apps/web run typecheck
+npm --prefix apps/web test
+npm run test:rules
+npm run test:e2e
+```
+
+The rules suite covers Firestore and Storage authorization. The end-to-end suite uses
+the Firebase emulators and verifies buyer and producer order journeys on desktop and
+mobile viewports without touching production data or payments.
+
 ## Recovery
 
 The complete original ZIP, including generated dependencies and historical files, is preserved under `backups/`. It is excluded from Git and must not be modified during normal development.

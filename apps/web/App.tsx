@@ -15,6 +15,8 @@ import BuyerOrdersPage from "./pages/BuyerOrdersPage";
 import ContactPage from "./pages/ContactPage";
 import AccountPage from "./pages/AccountPage";
 import OrderSuccessPage from "./pages/OrderSuccessPage";
+import AdminDashboardPage from "./pages/AdminDashboardPage";
+import { isAdminEmail } from "./utils/admin";
 
 import { auth, db, functions, isFirebaseEmulatorMode } from './firebase';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut } from 'firebase/auth';
@@ -122,7 +124,6 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     await setDoc(userRef, {
       role: newProfile.role,
       buyerProfileComplete: false,
-      subscriptionStatus: newProfile.subscriptionStatus,
       userAgreementAcceptedAt: null,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -655,6 +656,15 @@ const Header = () => {
                 Account
               </Link>
 
+              {isAdminEmail(user.email) && (
+                <Link
+                  to="/admin"
+                  className="text-sm font-bold text-amber-700 hover:text-amber-800"
+                >
+                  Administration
+                </Link>
+              )}
+
               {user.role === UserRole.PRODUCER && (
                 <Link
                   to="/producer/payouts"
@@ -750,6 +760,15 @@ export default function App() {
             element={
               <ProtectedRoute role={UserRole.BUYER} requireBuyerReady>
                 <BuyerOrdersPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute>
+                <AdminDashboardPage />
               </ProtectedRoute>
             }
           />

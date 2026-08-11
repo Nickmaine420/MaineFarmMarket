@@ -88,6 +88,7 @@ type OrderDoc = {
   fulfillment?: Fulfillment;
   paymentMode?: "direct" | "stripe";
   paymentStatus?: string;
+  disputeStatus?: string;
 };
 
 function formatWhen(ts: any): string {
@@ -277,6 +278,26 @@ const ProducerDashboard = () => {
         tone: "error",
         message: e instanceof Error ? e.message : "Could not update the order.",
       });
+    } finally {
+      setPendingOrderId(null);
+    }
+  };
+
+  const openProducerDispute = async (orderId: string) => {
+    const reason = window.prompt(
+      "Describe the order problem for Maine Farm Market support (at least 10 characters)."
+    );
+    if (!reason) return;
+    try {
+      setPendingOrderId(orderId);
+      const openDispute = httpsCallable<
+        { orderId: string; reason: string },
+        { disputeId: string; status: string }
+      >(functions, "openOrderDispute");
+      await openDispute({ orderId, reason: reason.trim() });
+      setNotice({ tone: "success", message: "The order problem was sent to support." });
+    } catch (error: any) {
+      setNotice({ tone: "error", message: error?.message || "Could not open the dispute." });
     } finally {
       setPendingOrderId(null);
     }
@@ -586,6 +607,14 @@ const ProducerDashboard = () => {
                                 {pendingOrderId === orderId ? "Updating…" : action.label}
                               </button>
                             ))}
+                            <button
+                              type="button"
+                              onClick={() => void openProducerDispute(orderId)}
+                              disabled={pendingOrderId === orderId}
+                              className="rounded-xl border border-stone-300 bg-white px-3 py-2 font-semibold disabled:opacity-50"
+                            >
+                              {o.disputeStatus === "open" ? "Dispute open" : "Report problem"}
+                            </button>
                           </div>
                         </div>
 

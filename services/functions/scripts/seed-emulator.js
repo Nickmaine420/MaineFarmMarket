@@ -19,20 +19,32 @@ const auth = getAuth();
 const now = Timestamp.now();
 const password = "MfmEmulatorTest2026!";
 
+async function resetFirestoreEmulator() {
+  const projectId = process.env.GCLOUD_PROJECT;
+  const endpoint = `http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/${projectId}/databases/(default)/documents`;
+  const response = await fetch(endpoint, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(`Could not reset the Firestore emulator (${response.status}).`);
+  }
+}
+
 async function upsertAuthUser({ uid, email, displayName }) {
   try {
-    await auth.updateUser(uid, { email, displayName, password });
+    await auth.updateUser(uid, { email, displayName, password, emailVerified: true });
   } catch (error) {
     if (error.code !== "auth/user-not-found") throw error;
-    await auth.createUser({ uid, email, displayName, password });
+    await auth.createUser({ uid, email, displayName, password, emailVerified: true });
   }
 }
 
 async function main() {
+  await resetFirestoreEmulator();
+
   const producerUid = "emulator-producer";
   const buyerUid = "emulator-buyer";
   const testOrderId = "test-order-direct-001";
   const scheduledAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  const reservationExpiresAt = Timestamp.fromMillis(Date.now() + 90 * 60 * 1000);
   const testOrderItems = [
     {
       productId: "test-product-blueberries",
@@ -156,7 +168,8 @@ async function main() {
     producerStatuses: {
       [producerUid]: { status: "awaiting_payment" },
     },
-    inventoryReservationStatus: "committed",
+    inventoryReservationStatus: "held",
+    reservationExpiresAt,
     itemsSnapshot: testOrderItems,
     pricing: {
       source: "emulator",
@@ -200,6 +213,7 @@ async function main() {
       status: "awaiting_payment",
       paymentMode: "direct",
       paymentStatus: "arrange_with_buyer",
+      reservationExpiresAt,
       totalCents: 500,
       fulfillment: {
         method: "pickup",

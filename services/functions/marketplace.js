@@ -4,6 +4,9 @@ const MAX_CART_ITEMS = 100;
 const MAX_ITEM_QUANTITY = 999;
 const PICKUP_MIN_LEAD_MS = 60 * 60 * 1000;
 const DELIVERY_MIN_LEAD_MS = 24 * 60 * 60 * 1000;
+const DIRECT_ORDER_MAX_HOLD_MS = 24 * 60 * 60 * 1000;
+const DIRECT_ORDER_MIN_HOLD_MS = 30 * 60 * 1000;
+const DIRECT_ORDER_SCHEDULE_BUFFER_MS = 30 * 60 * 1000;
 
 function normalizeRequestedItems(itemsInput) {
   if (!Array.isArray(itemsInput) || itemsInput.length === 0) {
@@ -96,13 +99,99 @@ function deriveBuyerOrderStatus(producerIds, producerStatuses, fallbackStatus) {
   return fallbackStatus || "pending";
 }
 
+function canBuyerCancelDirectOrder(producerStatuses) {
+  const statuses = Object.values(producerStatuses || {})
+    .map((entry) => String(entry?.status || "").toLowerCase())
+    .filter(Boolean);
+  if (!statuses.length) return true;
+  return statuses.every((status) =>
+    ["awaiting_payment", "pending", "pending_payment", "new", "cancelled"].includes(
+      status
+    )
+  );
+}
+
+function directProducerStatus(value) {
+  return String(value?.status || value || "awaiting_payment").toLowerCase();
+}
+
+function directOrderInventoryState(producerIds, producerStatuses) {
+  const statuses = producerIds.map((producerId) =>
+    directProducerStatus(producerStatuses?.[producerId])
+  );
+  if (
+    statuses.some((status) =>
+      ["awaiting_payment", "pending", "pending_payment", "new"].includes(status)
+    )
+  ) {
+    return "held";
+  }
+  if (statuses.some((status) => ["accepted", "ready", "completed"].includes(status))) {
+    return "committed";
+  }
+  return "released";
+}
+
+function pendingDirectProducerIds(producerIds, producerStatuses) {
+  return producerIds.filter((producerId) =>
+    ["awaiting_payment", "pending", "pending_payment", "new"].includes(
+      directProducerStatus(producerStatuses?.[producerId])
+    )
+  );
+}
+
+function directOrderReservationExpiry(scheduledAt, nowMs = Date.now()) {
+  const maximum = nowMs + DIRECT_ORDER_MAX_HOLD_MS;
+  const scheduledMs = Date.parse(String(scheduledAt || ""));
+  const beforeFulfillment = Number.isFinite(scheduledMs)
+    ? scheduledMs - DIRECT_ORDER_SCHEDULE_BUFFER_MS
+    : maximum;
+  return Math.max(
+    nowMs + DIRECT_ORDER_MIN_HOLD_MS,
+    Math.min(maximum, beforeFulfillment)
+  );
+}
+
+function allocateRefundAcrossTransfers(transfers, refundAmountCents, orderTotalCents) {
+  const normalized = (Array.isArray(transfers) ? transfers : [])
+    .map((transfer) => ({
+      ...transfer,
+      amountCents: Math.max(0, Math.trunc(Number(transfer?.amountCents || 0))),
+    }))
+    .filter((transfer) => transfer.transferId && transfer.amountCents > 0);
+  const refund = Math.max(0, Math.trunc(Number(refundAmountCents || 0)));
+  const total = Math.max(0, Math.trunc(Number(orderTotalCents || 0)));
+  if (!normalized.length || !refund || !total) return [];
+
+  const ratio = Math.min(1, refund / total);
+  let remaining = Math.min(
+    normalized.reduce((sum, transfer) => sum + transfer.amountCents, 0),
+    Math.round(normalized.reduce((sum, transfer) => sum + transfer.amountCents, 0) * ratio)
+  );
+  return normalized.map((transfer, index) => {
+    const amountCents =
+      index === normalized.length - 1
+        ? remaining
+        : Math.min(remaining, Math.round(transfer.amountCents * ratio));
+    remaining -= amountCents;
+    return { ...transfer, reversalAmountCents: amountCents };
+  });
+}
+
 module.exports = {
+  DIRECT_ORDER_MAX_HOLD_MS,
+  DIRECT_ORDER_MIN_HOLD_MS,
   DELIVERY_MIN_LEAD_MS,
   MAX_CART_ITEMS,
   MAX_ITEM_QUANTITY,
   PICKUP_MIN_LEAD_MS,
+  allocateRefundAcrossTransfers,
   assertProducerStatusTransition,
+  canBuyerCancelDirectOrder,
+  directOrderInventoryState,
+  directOrderReservationExpiry,
   deriveBuyerOrderStatus,
   normalizeRequestedItems,
+  pendingDirectProducerIds,
   validateScheduledAt,
 };

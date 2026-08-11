@@ -3,9 +3,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  allocateRefundAcrossTransfers,
   assertProducerStatusTransition,
+  canBuyerCancelDirectOrder,
+  directOrderInventoryState,
+  directOrderReservationExpiry,
   deriveBuyerOrderStatus,
   normalizeRequestedItems,
+  pendingDirectProducerIds,
   validateScheduledAt,
 } = require("../marketplace");
 
@@ -78,5 +83,68 @@ test("buyer status summarizes all producer statuses", () => {
       "paid"
     ),
     "partially_completed"
+  );
+});
+
+test("buyers may only cancel direct orders before a producer accepts", () => {
+  assert.equal(
+    canBuyerCancelDirectOrder({ p1: { status: "awaiting_payment" } }),
+    true
+  );
+  assert.equal(
+    canBuyerCancelDirectOrder({
+      p1: { status: "awaiting_payment" },
+      p2: { status: "cancelled" },
+    }),
+    true
+  );
+  assert.equal(canBuyerCancelDirectOrder({ p1: { status: "accepted" } }), false);
+});
+
+test("multi-producer inventory remains held only for unanswered segments", () => {
+  const ids = ["p1", "p2", "p3"];
+  const statuses = {
+    p1: { status: "accepted" },
+    p2: { status: "cancelled" },
+    p3: { status: "awaiting_payment" },
+  };
+  assert.equal(directOrderInventoryState(ids, statuses), "held");
+  assert.deepEqual(pendingDirectProducerIds(ids, statuses), ["p3"]);
+  assert.equal(
+    directOrderInventoryState(ids, {
+      p1: { status: "accepted" },
+      p2: { status: "cancelled" },
+      p3: { status: "cancelled" },
+    }),
+    "committed"
+  );
+});
+
+test("direct-order holds expire before fulfillment and never exceed 24 hours", () => {
+  const now = Date.parse("2026-08-11T12:00:00.000Z");
+  assert.equal(
+    directOrderReservationExpiry("2026-08-11T14:00:00.000Z", now),
+    Date.parse("2026-08-11T13:30:00.000Z")
+  );
+  assert.equal(
+    directOrderReservationExpiry("2026-08-14T12:00:00.000Z", now),
+    Date.parse("2026-08-12T12:00:00.000Z")
+  );
+});
+
+test("partial refunds reverse producer transfers proportionally", () => {
+  assert.deepEqual(
+    allocateRefundAcrossTransfers(
+      [
+        { transferId: "tr_1", amountCents: 6000 },
+        { transferId: "tr_2", amountCents: 3000 },
+      ],
+      5000,
+      10000
+    ).map(({ transferId, reversalAmountCents }) => ({ transferId, reversalAmountCents })),
+    [
+      { transferId: "tr_1", reversalAmountCents: 3000 },
+      { transferId: "tr_2", reversalAmountCents: 1500 },
+    ]
   );
 });

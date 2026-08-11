@@ -4,12 +4,14 @@
   "private": true,
   "description": "Maine Farm Market web, mobile, shared contracts, and Firebase backend.",
   "engines": {
-    "node": "20.x"
+    "node": "22.x"
   },
   "scripts": {
     "web:dev": "npm --prefix apps/web run dev",
     "web:build": "npm --prefix apps/web run build",
     "web:preview": "npm --prefix apps/web run preview",
+    "test:rules": "firebase emulators:exec --only firestore,storage \"npm --prefix apps/web run test:rules\"",
+    "test:e2e": "firebase emulators:exec --only auth,firestore,functions,storage \"npm --prefix services/functions run seed:emulator && npm --prefix apps/web run test:e2e\"",
     "mobile:sync": "npm --prefix apps/web run mobile:sync",
     "mobile:bundle": "npm run mobile:sync && cd apps/mobile/android && gradlew.bat bundleRelease",
     "functions:serve": "npm --prefix services/functions run serve",

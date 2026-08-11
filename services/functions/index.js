@@ -12,9 +12,14 @@ const {
 const { createHash } = require("node:crypto");
 const { GoogleAuth } = require("google-auth-library");
 const {
+  allocateRefundAcrossTransfers,
   assertProducerStatusTransition,
+  canBuyerCancelDirectOrder,
+  directOrderInventoryState,
+  directOrderReservationExpiry,
   deriveBuyerOrderStatus,
   normalizeRequestedItems,
+  pendingDirectProducerIds,
   validateScheduledAt,
 } = require("./marketplace");
 
@@ -81,9 +86,72 @@ const PRODUCER_PRICE_ID = "price_1T3Jap1SYqHEo1MCwtv3riOT";
 const PRODUCER_TERMS_VERSION = "2026-07-25";
 const GOOGLE_PLAY_PACKAGE_NAME = "com.mainefarmmarket.app";
 const GOOGLE_PLAY_PRODUCER_PRODUCT_ID = "producer_monthly";
+const DIRECT_ORDER_MAX_PER_HOUR = 5;
+const DIRECT_ORDER_MAX_PER_DAY = 20;
+const ADMIN_EMAILS = new Set(["contactacontractorllc@gmail.com"]);
 const googlePlayAuth = new GoogleAuth({
   scopes: ["https://www.googleapis.com/auth/androidpublisher"],
 });
+
+function normalizedAuthEmail(request) {
+  return String(request.auth?.token?.email || "").trim().toLowerCase();
+}
+
+function assertVerifiedAccount(request) {
+  if (request.auth?.token?.email_verified !== true) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Verify your email address before placing marketplace orders."
+    );
+  }
+}
+
+function assertAdmin(request) {
+  const email = normalizedAuthEmail(request);
+  if (
+    !request.auth?.uid ||
+    request.auth?.token?.email_verified !== true ||
+    (request.auth?.token?.admin !== true && !ADMIN_EMAILS.has(email))
+  ) {
+    throw new HttpsError("permission-denied", "Administrator access is required.");
+  }
+  return email;
+}
+
+function rateLimitRefs(uid, nowMs) {
+  const hourBucket = Math.floor(nowMs / (60 * 60 * 1000));
+  const dayBucket = Math.floor(nowMs / (24 * 60 * 60 * 1000));
+  return {
+    hourly: db.collection("order_rate_limits").doc(`${uid}_hour_${hourBucket}`),
+    daily: db.collection("order_rate_limits").doc(`${uid}_day_${dayBucket}`),
+  };
+}
+
+function enforceOrderRateLimitInTransaction(tx, uid, snapshots, refs, nowMs) {
+  const checks = [
+    { snapshot: snapshots.hourly, ref: refs.hourly, limit: DIRECT_ORDER_MAX_PER_HOUR },
+    { snapshot: snapshots.daily, ref: refs.daily, limit: DIRECT_ORDER_MAX_PER_DAY },
+  ];
+  checks.forEach(({ snapshot, ref, limit }) => {
+    const count = Number(snapshot.exists ? snapshot.get("count") : 0) || 0;
+    if (count >= limit) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many orders were placed from this account. Please wait and try again."
+      );
+    }
+    tx.set(
+      ref,
+      {
+        uid,
+        count: count + 1,
+        updatedAt: FieldValue.serverTimestamp(),
+        expiresAt: Timestamp.fromMillis(nowMs + 48 * 60 * 60 * 1000),
+      },
+      { merge: true }
+    );
+  });
+}
 
 // Safe APP_URL fallback (prevents deploy-time crashes)
 function getAppUrl() {
@@ -178,6 +246,9 @@ async function syncStripeSubscriptionRecord(subscription, eventType) {
             }
           : {}),
       },
+      subscriptionStatus: ["active", "trialing"].includes(status)
+        ? "active"
+        : "inactive",
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true }
@@ -376,6 +447,7 @@ async function syncGooglePlaySubscriptionForUser(uid, purchaseToken) {
           basePlanId: summary.basePlanId,
           latestOrderId: summary.latestOrderId,
         },
+        subscriptionStatus: summary.status,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -504,7 +576,7 @@ async function resolveProductsAndPricing(itemsInput) {
   const productSnaps = await db.getAll(...productRefs);
 
   let subtotalCents = 0;
-  const resolvedItems = normalizedItems.map((item, idx) => {
+  let resolvedItems = normalizedItems.map((item, idx) => {
     const snap = productSnaps[idx];
     if (!snap.exists) {
       throw new HttpsError("failed-precondition", "A product in your cart is no longer available.");
@@ -553,6 +625,30 @@ async function resolveProductsAndPricing(itemsInput) {
       imageUrl: p.photoUrl || p.imageUrl || p.image || "",
     };
   });
+
+  const producerIds = [...new Set(resolvedItems.map((item) => item.producerId))];
+  const farmSnapshots = producerIds.length
+    ? await db.getAll(...producerIds.map((producerId) => db.collection("farms").doc(producerId)))
+    : [];
+  const publicProducerDetails = new Map(
+    farmSnapshots.map((snapshot) => {
+      const farm = snapshot.exists ? snapshot.data() || {} : {};
+      return [
+        snapshot.id,
+        {
+          producerName: String(farm.farmName || farm.name || "").trim(),
+          producerTown: [farm.city, farm.state].filter(Boolean).join(", "),
+          producerPhone: String(farm.phone || "").trim(),
+        },
+      ];
+    })
+  );
+  resolvedItems = resolvedItems.map((item) => ({
+    ...item,
+    ...(publicProducerDetails.get(item.producerId) || {}),
+    producerName:
+      publicProducerDetails.get(item.producerId)?.producerName || item.producerName,
+  }));
 
   const FEE_RATE = 0.029;
   const FEE_FIXED = 30;
@@ -740,15 +836,31 @@ async function createDirectMarketplaceOrder({
   const user = await getUserOrThrow(uid);
   const buyerName = user.displayName || user.email || "Buyer";
   const buyerEmail = user.email || "";
+  const nowMs = Date.now();
+  const reservationExpiresAt = Timestamp.fromMillis(
+    directOrderReservationExpiry(scheduledAt, nowMs)
+  );
+  const limits = rateLimitRefs(uid, nowMs);
 
   return db.runTransaction(async (tx) => {
-    const existing = await tx.get(intentRef);
+    const [existing, hourlyLimit, dailyLimit] = await Promise.all([
+      tx.get(intentRef),
+      tx.get(limits.hourly),
+      tx.get(limits.daily),
+    ]);
     if (existing.exists) {
       const data = existing.data() || {};
       return { orderId: data.orderId, paymentMode: "direct" };
     }
 
     await reserveInventoryInTransaction(tx, resolvedItems);
+    enforceOrderRateLimitInTransaction(
+      tx,
+      uid,
+      { hourly: hourlyLimit, daily: dailyLimit },
+      limits,
+      nowMs
+    );
     const producerStatuses = Object.fromEntries(
       producers.map((producer) => [
         producer.producerId,
@@ -768,7 +880,8 @@ async function createDirectMarketplaceOrder({
       paymentMode: "direct",
       paymentStatus: "arrange_with_producer",
       producerStatuses,
-      inventoryReservationStatus: "committed",
+      inventoryReservationStatus: "held",
+      reservationExpiresAt,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       itemsSnapshot: resolvedItems,
@@ -805,6 +918,7 @@ async function createDirectMarketplaceOrder({
         status: "awaiting_payment",
         paymentMode: "direct",
         paymentStatus: "arrange_with_buyer",
+        reservationExpiresAt,
         totalCents: producer.subtotalCents || 0,
         fulfillment: {
           method: fulfillment.fulfillmentMethod || deliveryMethod,
@@ -841,7 +955,22 @@ async function releaseHeldOrderInventory(orderId, finalStatus = "cancelled") {
     const order = orderSnapshot.data() || {};
     if (order.inventoryReservationStatus !== "held") return false;
 
-    const items = Array.isArray(order.itemsSnapshot) ? order.itemsSnapshot : [];
+    const allItems = Array.isArray(order.itemsSnapshot) ? order.itemsSnapshot : [];
+    const producerIds = Array.isArray(order.producers)
+      ? order.producers
+          .map((producer) => String(producer?.producerId || ""))
+          .filter(Boolean)
+      : [];
+    const currentProducerStatuses = order.producerStatuses || {};
+    const producerIdsToRelease =
+      order.paymentMode === "direct"
+        ? pendingDirectProducerIds(producerIds, currentProducerStatuses)
+        : producerIds;
+    const producerIdSet = new Set(producerIdsToRelease);
+    const items =
+      order.paymentMode === "direct"
+        ? allItems.filter((item) => producerIdSet.has(String(item.producerId || "")))
+        : allItems;
     const productRefs = items.map((item) =>
       db.collection("products").doc(String(item.productId))
     );
@@ -861,12 +990,46 @@ async function releaseHeldOrderInventory(orderId, finalStatus = "cancelled") {
         updatedAt: FieldValue.serverTimestamp(),
       });
     });
+    const producerStatuses = { ...currentProducerStatuses };
+    if (order.paymentMode === "direct") {
+      producerIdsToRelease.forEach((producerId) => {
+        producerStatuses[producerId] = {
+          status: "cancelled",
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+        tx.set(
+          db.collection("producerOrders").doc(producerId).collection("orders").doc(orderId),
+          {
+            status: "cancelled",
+            paymentStatus: "expired",
+            inventoryReleasedAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      });
+    }
+    const directInventoryStatus =
+      order.paymentMode === "direct"
+        ? directOrderInventoryState(producerIds, producerStatuses)
+        : "released";
+    const directBuyerStatus =
+      order.paymentMode === "direct"
+        ? deriveBuyerOrderStatus(producerIds, producerStatuses, finalStatus)
+        : finalStatus;
+    const hasCommittedDirectSegments =
+      order.paymentMode === "direct" && directInventoryStatus === "committed";
     tx.set(
       orderRef,
       {
-        status: finalStatus,
-        paymentStatus: finalStatus === "expired" ? "expired" : "cancelled",
-        inventoryReservationStatus: "released",
+        status: hasCommittedDirectSegments ? directBuyerStatus : finalStatus,
+        paymentStatus: hasCommittedDirectSegments
+          ? "partially_expired"
+          : finalStatus === "expired"
+            ? "expired"
+            : "cancelled",
+        ...(producerStatuses ? { producerStatuses } : {}),
+        inventoryReservationStatus: directInventoryStatus,
         inventoryReleasedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       },
@@ -969,11 +1132,12 @@ exports.createCartCheckoutSessionV2 = onCall(
     try {
       const uid = request.auth?.uid;
       if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+      assertVerifiedAccount(request);
 
       const data = request.data || {};
       const idempotencyKey = String(data.idempotencyKey || "").trim();
-      if (!idempotencyKey) {
-        throw new HttpsError("invalid-argument", "idempotencyKey is required");
+      if (!/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) {
+        throw new HttpsError("invalid-argument", "A valid idempotency key is required.");
       }
 
       const itemsInput = Array.isArray(data.items) ? data.items : [];
@@ -1275,6 +1439,112 @@ exports.createCartCheckoutSessionV2 = onCall(
   }
 );
 
+exports.cancelBuyerDirectOrder = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+  assertVerifiedAccount(request);
+  const orderId = String(request.data?.orderId || "").trim();
+  if (!orderId || orderId.length > 128) {
+    throw new HttpsError("invalid-argument", "A valid order ID is required.");
+  }
+
+  const orderRef = db.collection("orders").doc(orderId);
+  return db.runTransaction(async (tx) => {
+    const orderSnapshot = await tx.get(orderRef);
+    if (!orderSnapshot.exists) throw new HttpsError("not-found", "Order not found.");
+    const order = orderSnapshot.data() || {};
+    if (order.buyerId !== uid) {
+      throw new HttpsError("permission-denied", "This order does not belong to you.");
+    }
+    if (order.paymentMode !== "direct") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Paid card orders must be handled through the refund process."
+      );
+    }
+    if (
+      order.status === "cancelled" &&
+      order.inventoryReservationStatus === "released"
+    ) {
+      return { orderId, status: "cancelled" };
+    }
+    if (!canBuyerCancelDirectOrder(order.producerStatuses)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "A producer has already accepted this order. Contact support if you need help."
+      );
+    }
+
+    const allItems = Array.isArray(order.itemsSnapshot) ? order.itemsSnapshot : [];
+    const producerIds = Array.isArray(order.producers)
+      ? order.producers
+          .map((producer) => String(producer?.producerId || ""))
+          .filter(Boolean)
+      : [];
+    const producerIdsToRelease = pendingDirectProducerIds(
+      producerIds,
+      order.producerStatuses || {}
+    );
+    const producerIdSet = new Set(producerIdsToRelease);
+    const items = allItems.filter((item) =>
+      producerIdSet.has(String(item.producerId || ""))
+    );
+    const productRefs = items.map((item) =>
+      db.collection("products").doc(String(item.productId || ""))
+    );
+    const productSnapshots = [];
+    for (const productRef of productRefs) productSnapshots.push(await tx.get(productRef));
+
+    if (["held", "committed"].includes(order.inventoryReservationStatus)) {
+      productSnapshots.forEach((snapshot, index) => {
+        if (!snapshot.exists) return;
+        const current = Number(snapshot.get("quantityAvailable"));
+        const restored =
+          (Number.isInteger(current) ? current : 0) + Number(items[index]?.qty || 0);
+        tx.update(snapshot.ref, {
+          quantityAvailable: restored,
+          inStock: restored > 0,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      });
+    }
+
+    const producerStatuses = Object.fromEntries(
+      producerIds.map((producerId) => [
+        producerId,
+        { status: "cancelled", updatedAt: FieldValue.serverTimestamp() },
+      ])
+    );
+    producerIds.forEach((producerId) => {
+      tx.set(
+        db.collection("producerOrders").doc(producerId).collection("orders").doc(orderId),
+        {
+          status: "cancelled",
+          paymentStatus: "cancelled_by_buyer",
+          inventoryReleasedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
+    tx.set(
+      orderRef,
+      {
+        status: "cancelled",
+        paymentStatus: "cancelled_by_buyer",
+        producerStatuses,
+        inventoryReservationStatus: "released",
+        inventoryReleasedAt: FieldValue.serverTimestamp(),
+        cancelledBy: "buyer",
+        cancelledAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { orderId, status: "cancelled" };
+  });
+});
+
 exports.updateProducerOrderStatus = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
@@ -1363,6 +1633,10 @@ exports.updateProducerOrderStatus = onCall(async (request) => {
         producerStatuses,
         mainOrder.status
       );
+      const directInventoryStatus =
+        producerOrder.paymentMode === "direct"
+          ? directOrderInventoryState(producerIds, producerStatuses)
+          : mainOrder.inventoryReservationStatus;
 
       tx.update(producerOrderRef, {
         status: nextStatus,
@@ -1376,6 +1650,16 @@ exports.updateProducerOrderStatus = onCall(async (request) => {
         {
           status: buyerStatus,
           producerStatuses,
+          ...(directInventoryStatus
+            ? { inventoryReservationStatus: directInventoryStatus }
+            : {}),
+          ...(directInventoryStatus === "committed" &&
+          mainOrder.inventoryReservationStatus !== "committed"
+            ? { inventoryCommittedAt: FieldValue.serverTimestamp() }
+            : {}),
+          ...(directInventoryStatus === "released"
+            ? { inventoryReleasedAt: FieldValue.serverTimestamp() }
+            : {}),
           updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true }
@@ -1395,6 +1679,8 @@ exports.releaseExpiredCheckoutReservations = onSchedule(
     const snapshot = await db
       .collection("orders")
       .where("inventoryReservationStatus", "==", "held")
+      .where("reservationExpiresAt", "<=", Timestamp.now())
+      .orderBy("reservationExpiresAt", "asc")
       .limit(200)
       .get();
     const nowMs = Date.now();
@@ -1412,6 +1698,543 @@ exports.releaseExpiredCheckoutReservations = onSchedule(
         }
       }
     }
+    const expiredRateLimits = await db
+      .collection("order_rate_limits")
+      .where("expiresAt", "<=", Timestamp.now())
+      .limit(500)
+      .get();
+    if (!expiredRateLimits.empty) {
+      const batch = db.batch();
+      expiredRateLimits.docs.forEach((document) => batch.delete(document.ref));
+      await batch.commit();
+    }
+  }
+);
+
+exports.openOrderDispute = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+  assertVerifiedAccount(request);
+  const orderId = String(request.data?.orderId || "").trim();
+  const reason = String(request.data?.reason || "").trim();
+  if (!orderId || orderId.length > 128) {
+    throw new HttpsError("invalid-argument", "A valid order ID is required.");
+  }
+  if (reason.length < 10 || reason.length > 2000) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Describe the order problem in 10 to 2,000 characters."
+    );
+  }
+
+  const orderRef = db.collection("orders").doc(orderId);
+  const orderSnapshot = await orderRef.get();
+  if (!orderSnapshot.exists) throw new HttpsError("not-found", "Order not found.");
+  const order = orderSnapshot.data() || {};
+  const producerIds = Array.isArray(order.producers)
+    ? order.producers.map((producer) => String(producer?.producerId || ""))
+    : [];
+  if (order.buyerId !== uid && !producerIds.includes(uid)) {
+    throw new HttpsError("permission-denied", "This order does not belong to you.");
+  }
+
+  const disputeRef = db.collection("disputes").doc(`${orderId}_${uid}`);
+  const existing = await disputeRef.get();
+  if (existing.exists && existing.get("status") === "open") {
+    await disputeRef.set(
+      {
+        reason,
+        updateCount: FieldValue.increment(1),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { disputeId: disputeRef.id, status: "open" };
+  }
+  await Promise.all([
+    disputeRef.set(
+      {
+        orderId,
+        openedByUid: uid,
+        openedByRole: order.buyerId === uid ? "buyer" : "producer",
+        reason,
+        status: "open",
+        reopenCount: FieldValue.increment(existing.exists ? 1 : 0),
+        createdAt: existing.exists
+          ? existing.get("createdAt") || FieldValue.serverTimestamp()
+          : FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+    orderRef.set(
+      {
+        disputeStatus: "open",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+    order.buyerId !== uid
+      ? db
+          .collection("producerOrders")
+          .doc(uid)
+          .collection("orders")
+          .doc(orderId)
+          .set(
+            { disputeStatus: "open", updatedAt: FieldValue.serverTimestamp() },
+            { merge: true }
+          )
+      : Promise.resolve(),
+  ]);
+  return { disputeId: disputeRef.id, status: "open" };
+});
+
+function serializeAdminDocument(document) {
+  const data = document.data() || {};
+  const serialized = {};
+  Object.entries(data).forEach(([key, value]) => {
+    serialized[key] = value?.toMillis ? value.toMillis() : value;
+  });
+  return { id: document.id, ...serialized };
+}
+
+exports.getAdminDashboard = onCall(async (request) => {
+  assertAdmin(request);
+  const [reportsSnapshot, disputesSnapshot, ordersSnapshot] = await Promise.all([
+    db.collection("reports").orderBy("createdAt", "desc").limit(50).get(),
+    db.collection("disputes").orderBy("updatedAt", "desc").limit(50).get(),
+    db.collection("orders").orderBy("createdAt", "desc").limit(50).get(),
+  ]);
+  return {
+    reports: reportsSnapshot.docs.map(serializeAdminDocument),
+    disputes: disputesSnapshot.docs.map(serializeAdminDocument),
+    orders: ordersSnapshot.docs.map((document) => {
+      const order = serializeAdminDocument(document);
+      return {
+        id: order.id,
+        status: order.status || "unknown",
+        paymentMode: order.paymentMode || "unknown",
+        paymentStatus: order.paymentStatus || "unknown",
+        disputeStatus: order.disputeStatus || null,
+        totalCents: Number(order.pricing?.totalCents || order.totalCents || 0),
+        refundedCents: Number(order.refund?.refundedCents || 0),
+        createdAt: order.createdAt || null,
+      };
+    }),
+  };
+});
+
+exports.resolveAdminReport = onCall(async (request) => {
+  const adminEmail = assertAdmin(request);
+  const reportId = String(request.data?.reportId || "").trim();
+  const status = String(request.data?.status || "").trim().toLowerCase();
+  const resolution = String(request.data?.resolution || "").trim().slice(0, 2000);
+  if (!reportId || !["resolved", "dismissed"].includes(status)) {
+    throw new HttpsError("invalid-argument", "Choose a valid report resolution.");
+  }
+  await db.collection("reports").doc(reportId).set(
+    {
+      status,
+      resolution,
+      reviewedBy: adminEmail,
+      reviewedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+  return { reportId, status };
+});
+
+exports.resolveAdminDispute = onCall(async (request) => {
+  const adminEmail = assertAdmin(request);
+  const disputeId = String(request.data?.disputeId || "").trim();
+  const status = String(request.data?.status || "").trim().toLowerCase();
+  const resolution = String(request.data?.resolution || "").trim();
+  if (!disputeId || !["resolved", "dismissed"].includes(status)) {
+    throw new HttpsError("invalid-argument", "Choose a valid dispute resolution.");
+  }
+  if (resolution.length < 3 || resolution.length > 2000) {
+    throw new HttpsError("invalid-argument", "Enter a brief resolution note.");
+  }
+  const disputeRef = db.collection("disputes").doc(disputeId);
+  const snapshot = await disputeRef.get();
+  if (!snapshot.exists) throw new HttpsError("not-found", "Dispute not found.");
+  const orderId = String(snapshot.get("orderId") || "");
+  await Promise.all([
+    disputeRef.set(
+      {
+        status,
+        resolution,
+        reviewedBy: adminEmail,
+        reviewedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+    orderId
+      ? db.collection("orders").doc(orderId).set(
+          {
+            disputeStatus: status,
+            disputeResolution: resolution,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+      : Promise.resolve(),
+  ]);
+  return { disputeId, status };
+});
+
+async function reconcileCanceledStripeProducerSubscriptions() {
+  const stripe = getStripe();
+  const producerSnapshot = await db.collection("users").where("role", "==", "producer").get();
+  let inspected = 0;
+  let updated = 0;
+  for (const producer of producerSnapshot.docs) {
+    const profile = producer.data() || {};
+    const subscription = profile.subscription || {};
+    const subscriptionId = String(
+      subscription.stripeSubscriptionId || profile.stripeSubscriptionId || ""
+    ).trim();
+    if (!subscriptionId) continue;
+    inspected += 1;
+    try {
+      const remote = await stripe.subscriptions.retrieve(subscriptionId);
+      const canonicalStatus = String(remote.status || "canceled");
+      const legacyStatus = ["active", "trialing"].includes(canonicalStatus)
+        ? "active"
+        : "inactive";
+      if (
+        subscription.status !== canonicalStatus ||
+        subscription.provider !== "stripe" ||
+        profile.subscriptionStatus !== legacyStatus
+      ) {
+        await producer.ref.set(
+          {
+            subscription: {
+              ...subscription,
+              provider: "stripe",
+              status: canonicalStatus,
+              stripeSubscriptionId: subscriptionId,
+              currentPeriodEnd: Number(remote.current_period_end || 0) * 1000,
+              cancelAtPeriodEnd: remote.cancel_at_period_end === true,
+              reconciledAt: FieldValue.serverTimestamp(),
+            },
+            subscriptionStatus: legacyStatus,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        updated += 1;
+      }
+    } catch (error) {
+      if (error?.code === "resource_missing") {
+        await producer.ref.set(
+          {
+            subscription: {
+              ...subscription,
+              provider: "stripe",
+              status: "canceled",
+              stripeSubscriptionId: subscriptionId,
+              reconciledAt: FieldValue.serverTimestamp(),
+            },
+            subscriptionStatus: "inactive",
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        updated += 1;
+        continue;
+      }
+      console.error("Could not reconcile producer Stripe subscription", {
+        uid: producer.id,
+        message: error?.message || String(error),
+      });
+    }
+  }
+  return { inspected, updated };
+}
+
+exports.reconcileProducerSubscriptions = onCall(
+  { secrets: [STRIPE_SECRET_KEY] },
+  async (request) => {
+    assertAdmin(request);
+    return reconcileCanceledStripeProducerSubscriptions();
+  }
+);
+
+exports.reconcileProducerSubscriptionsScheduled = onSchedule(
+  {
+    schedule: "every 6 hours",
+    timeZone: "America/New_York",
+    timeoutSeconds: 540,
+    secrets: [STRIPE_SECRET_KEY],
+  },
+  reconcileCanceledStripeProducerSubscriptions
+);
+
+async function finalizeMarketplaceRefund(orderId, refund, amountCents, fullRefund) {
+  const orderRef = db.collection("orders").doc(orderId);
+  return db.runTransaction(async (tx) => {
+    const orderSnapshot = await tx.get(orderRef);
+    if (!orderSnapshot.exists) throw new HttpsError("not-found", "Order not found.");
+    const order = orderSnapshot.data() || {};
+    const appliedRefundIds = Array.isArray(order.refund?.appliedRefundIds)
+      ? order.refund.appliedRefundIds.map(String)
+      : [];
+    if (appliedRefundIds.includes(refund.id)) {
+      return {
+        alreadyApplied: true,
+        inventoryRestored: order.refund?.inventoryRestored === true,
+      };
+    }
+    const producerStatuses = Object.values(order.producerStatuses || {}).map(
+      (entry) => String(entry?.status || "").toLowerCase()
+    );
+    const shouldRestoreInventory =
+      fullRefund &&
+      order.inventoryReservationStatus === "committed" &&
+      order.status !== "completed" &&
+      !producerStatuses.includes("completed");
+    const items =
+      shouldRestoreInventory
+        ? Array.isArray(order.itemsSnapshot)
+          ? order.itemsSnapshot
+          : []
+        : [];
+    const productSnapshots = [];
+    for (const item of items) {
+      productSnapshots.push(
+        await tx.get(db.collection("products").doc(String(item.productId || "")))
+      );
+    }
+    productSnapshots.forEach((snapshot, index) => {
+      if (!snapshot.exists) return;
+      const current = Number(snapshot.get("quantityAvailable"));
+      const restored =
+        (Number.isInteger(current) ? current : 0) + Number(items[index]?.qty || 0);
+      tx.update(snapshot.ref, {
+        quantityAvailable: restored,
+        inStock: restored > 0,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+
+    const previousRefunded = Number(order.refund?.refundedCents || 0);
+    const producers = Array.isArray(order.producers) ? order.producers : [];
+    producers.forEach((producer) => {
+      const producerId = String(producer?.producerId || "");
+      if (!producerId) return;
+      tx.set(
+        db.collection("producerOrders").doc(producerId).collection("orders").doc(orderId),
+        {
+          ...(fullRefund ? { status: "refunded" } : {}),
+          paymentStatus: fullRefund ? "refunded" : "partially_refunded",
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
+    tx.set(
+      orderRef,
+      {
+        ...(fullRefund ? { status: "refunded" } : {}),
+        ...(shouldRestoreInventory ? { inventoryReservationStatus: "released" } : {}),
+        paymentStatus: fullRefund ? "refunded" : "partially_refunded",
+        refund: {
+          refundedCents: previousRefunded + amountCents,
+          latestRefundId: refund.id,
+          appliedRefundIds: [...appliedRefundIds, refund.id].slice(-100),
+          status: refund.status || "pending",
+          inventoryRestored: shouldRestoreInventory,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return {
+      alreadyApplied: false,
+      inventoryRestored: shouldRestoreInventory && items.length > 0,
+    };
+  });
+}
+
+async function applySucceededMarketplaceRefund(stripe, orderId, refund, reviewedBy) {
+  const orderSnapshot = await db.collection("orders").doc(orderId).get();
+  if (!orderSnapshot.exists) throw new HttpsError("not-found", "Order not found.");
+  const order = orderSnapshot.data() || {};
+  const amountCents = Number(refund.amount || 0);
+  const totalCents = Number(order.pricing?.totalCents || order.totalCents || 0);
+  const alreadyRefunded = Number(order.refund?.refundedCents || 0);
+  const allocations = allocateRefundAcrossTransfers(
+    order.stripeTransfers,
+    amountCents,
+    totalCents
+  );
+  const reversals = [];
+  for (const allocation of allocations) {
+    if (!allocation.reversalAmountCents) continue;
+    const reversal = await stripe.transfers.createReversal(
+      allocation.transferId,
+      {
+        amount: allocation.reversalAmountCents,
+        metadata: { orderId, refundId: refund.id },
+      },
+      { idempotencyKey: `refund_${refund.id}_${allocation.transferId}` }
+    );
+    reversals.push({
+      transferId: allocation.transferId,
+      reversalId: reversal.id,
+      amountCents: allocation.reversalAmountCents,
+    });
+  }
+  const fullRefund = alreadyRefunded + amountCents >= totalCents;
+  const finalized = await finalizeMarketplaceRefund(
+    orderId,
+    refund,
+    amountCents,
+    fullRefund
+  );
+  await db.collection("refunds").doc(refund.id).set(
+    {
+      orderId,
+      amountCents,
+      fullRefund,
+      stripeRefundId: refund.id,
+      status: refund.status,
+      reversals,
+      reviewedBy,
+      updatedAt: FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+  return {
+    orderId,
+    refundId: refund.id,
+    amountCents,
+    fullRefund,
+    status: refund.status,
+    inventoryRestored: finalized.inventoryRestored,
+  };
+}
+
+exports.refundMarketplaceOrder = onCall(
+  { secrets: [STRIPE_SECRET_KEY] },
+  async (request) => {
+    const adminEmail = assertAdmin(request);
+    const orderId = String(request.data?.orderId || "").trim();
+    const requestId = String(request.data?.requestId || "").trim();
+    if (!orderId || !requestId || requestId.length > 128) {
+      throw new HttpsError("invalid-argument", "Order and refund request IDs are required.");
+    }
+    const refundRequestId = createHash("sha256")
+      .update(`${orderId}\n${requestId}`)
+      .digest("hex");
+    const refundRequestRef = db.collection("refund_requests").doc(refundRequestId);
+    const existingRequest = await refundRequestRef.get();
+    if (existingRequest.exists && existingRequest.get("status") === "completed") {
+      return existingRequest.get("result");
+    }
+    const orderRef = db.collection("orders").doc(orderId);
+    const orderSnapshot = await orderRef.get();
+    if (!orderSnapshot.exists) throw new HttpsError("not-found", "Order not found.");
+    const order = orderSnapshot.data() || {};
+    if (order.paymentMode !== "stripe" || order.paymentStatus === "pending") {
+      throw new HttpsError("failed-precondition", "Only paid Stripe orders can be refunded.");
+    }
+    const totalCents = Number(order.pricing?.totalCents || order.totalCents || 0);
+    const alreadyRefunded = Number(order.refund?.refundedCents || 0);
+    const remaining = Math.max(0, totalCents - alreadyRefunded);
+    const resumedAmount = Number(
+      existingRequest.exists ? existingRequest.get("amountCents") || 0 : 0
+    );
+    const requestedAmount = resumedAmount || Number(request.data?.amountCents || remaining);
+    if (
+      !Number.isInteger(requestedAmount) ||
+      requestedAmount < 1 ||
+      (!existingRequest.exists && requestedAmount > remaining)
+    ) {
+      throw new HttpsError("invalid-argument", "Enter a refund amount within the remaining total.");
+    }
+    const paymentIntentId = String(
+      order.stripe?.paymentIntentId || order.stripePaymentIntent || ""
+    );
+    if (!paymentIntentId.startsWith("pi_")) {
+      throw new HttpsError("failed-precondition", "The Stripe payment reference is missing.");
+    }
+
+    await refundRequestRef.set(
+      {
+        orderId,
+        amountCents: requestedAmount,
+        status: "processing",
+        reviewedBy: adminEmail,
+        updatedAt: FieldValue.serverTimestamp(),
+        ...(existingRequest.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+      },
+      { merge: true }
+    );
+
+    const stripe = getStripe();
+    const refund = await stripe.refunds.create(
+      {
+        payment_intent: paymentIntentId,
+        amount: requestedAmount,
+        metadata: { orderId, reviewedBy: adminEmail, refundRequestId },
+      },
+      { idempotencyKey: `admin_refund_${refundRequestId}` }
+    );
+    if (refund.status !== "succeeded") {
+      const result = {
+        orderId,
+        refundId: refund.id,
+        amountCents: requestedAmount,
+        fullRefund: false,
+        status: refund.status || "pending",
+        inventoryRestored: false,
+      };
+      await Promise.all([
+        db.collection("refunds").doc(refund.id).set(
+          {
+            orderId,
+            amountCents: requestedAmount,
+            stripeRefundId: refund.id,
+            status: refund.status || "pending",
+            reviewedBy: adminEmail,
+            updatedAt: FieldValue.serverTimestamp(),
+            createdAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        ),
+        refundRequestRef.set(
+          {
+            status: refund.status || "pending",
+            result,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        ),
+      ]);
+      return result;
+    }
+    const result = await applySucceededMarketplaceRefund(
+      stripe,
+      orderId,
+      refund,
+      adminEmail
+    );
+    await refundRequestRef.set(
+      {
+        status: "completed",
+        result,
+        completedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return result;
   }
 );
 
@@ -1840,6 +2663,76 @@ exports.stripeWebhook = require("firebase-functions/v2/https").onRequest(
           return;
         }
 
+        if (
+          [
+            "refund.created",
+            "refund.updated",
+            "refund.failed",
+            "charge.refund.updated",
+          ].includes(type)
+        ) {
+          const refund = event.data.object || {};
+          const orderId = String(refund.metadata?.orderId || "");
+          if (!orderId || !String(refund.id || "").startsWith("re_")) return;
+          const reviewedBy = String(refund.metadata?.reviewedBy || "stripe_webhook");
+          const refundRequestId = String(refund.metadata?.refundRequestId || "");
+          await db.collection("refunds").doc(refund.id).set(
+            {
+              orderId,
+              amountCents: Number(refund.amount || 0),
+              stripeRefundId: refund.id,
+              status: refund.status || "pending",
+              failureReason: refund.failure_reason || null,
+              reviewedBy,
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+          if (refund.status === "succeeded") {
+            const result = await applySucceededMarketplaceRefund(
+              stripe,
+              orderId,
+              refund,
+              reviewedBy
+            );
+            if (refundRequestId) {
+              await db.collection("refund_requests").doc(refundRequestId).set(
+                {
+                  status: "completed",
+                  result,
+                  completedAt: FieldValue.serverTimestamp(),
+                  updatedAt: FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+              );
+            }
+          } else if (["failed", "canceled"].includes(refund.status)) {
+            if (refundRequestId) {
+              await db.collection("refund_requests").doc(refundRequestId).set(
+                {
+                  status: "failed",
+                  failureReason: refund.failure_reason || "Refund failed",
+                  updatedAt: FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+              );
+            }
+            await db.collection("orders").doc(orderId).set(
+              {
+                refund: {
+                  latestRefundId: refund.id,
+                  status: refund.status,
+                  failureReason: refund.failure_reason || "Refund failed",
+                  updatedAt: FieldValue.serverTimestamp(),
+                },
+                updatedAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+          }
+          return;
+        }
+
         if (type === "checkout.session.expired") {
           const session = event.data.object;
           const metadata = session.metadata || {};
@@ -2075,9 +2968,13 @@ exports.stripeWebhook = require("firebase-functions/v2/https").onRequest(
                 stripeCustomerId: session.customer || null,
                 subscription: {
                   status, // 'active', 'trialing', 'canceled', etc.
+                  provider: "stripe",
                   currentPeriodEnd: currentPeriodEndSec ? currentPeriodEndSec * 1000 : 0,
                   stripeSubscriptionId: subId || null,
                 },
+                subscriptionStatus: ["active", "trialing"].includes(status)
+                  ? "active"
+                  : "inactive",
                 updatedAt: FieldValue.serverTimestamp(),
               },
               { merge: true }

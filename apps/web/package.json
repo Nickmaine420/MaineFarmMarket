@@ -9,6 +9,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:rules": "vitest run --config vitest.rules.config.ts",
+    "test:e2e": "playwright test",
     "preview": "vite preview",
     "mobile:add": "cap add android",
     "mobile:sync": "npm run build && cap sync android",
@@ -24,6 +26,8 @@
   "devDependencies": {
     "@capacitor/android": "^8.4.2",
     "@capacitor/cli": "^8.4.2",
+    "@firebase/rules-unit-testing": "^5.0.0",
+    "@playwright/test": "^1.55.0",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.21",

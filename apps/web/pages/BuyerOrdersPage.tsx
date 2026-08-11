@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { auth, db } from "../firebase";
+import { auth, db, functions } from "../firebase";
 import {
   collection,
   doc,
@@ -10,6 +10,7 @@ import {
   where,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
 import { useNavigate } from "../router";
 
 function formatMoney(cents: number) {
@@ -71,6 +72,8 @@ type Order = {
   paymentMode?: "direct" | "stripe";
   paymentStatus?: string;
   producerStatuses?: Record<string, { status?: string }>;
+  reservationExpiresAt?: any;
+  disputeStatus?: string;
 };
 
 type ProducerInfo = {
@@ -85,6 +88,10 @@ export default function BuyerOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [producerCache, setProducerCache] = useState<Record<string, ProducerInfo>>({});
+  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [disputeOrderId, setDisputeOrderId] = useState<string | null>(null);
+  const [disputeReason, setDisputeReason] = useState("");
 
   useEffect(() => {
     let unsubOrders: (() => void) | null = null;
@@ -189,6 +196,8 @@ export default function BuyerOrdersPage() {
               paymentMode: data.paymentMode,
               paymentStatus: data.paymentStatus,
               producerStatuses: data.producerStatuses || {},
+              reservationExpiresAt: data.reservationExpiresAt,
+              disputeStatus: data.disputeStatus,
             };
           });
 
@@ -229,22 +238,15 @@ export default function BuyerOrdersPage() {
       uniqueProducerIds.map(async (producerId) => {
         if (cancelled) return;
         const farmRef = doc(db, "farms", producerId);
-        const userRef = doc(db, "users", producerId);
         try {
-          const [farmSnap, userSnap] = await Promise.all([
-            getDoc(farmRef),
-            getDoc(userRef),
-          ]);
+          const farmSnap = await getDoc(farmRef);
           if (cancelled) return;
           const f = farmSnap.exists() ? (farmSnap.data() as any) : null;
-          const u = userSnap.exists() ? (userSnap.data() as any) : null;
           const town = f
             ? [f.city, f.state].filter(Boolean).join(", ") || undefined
-            : u?.address?.city
-              ? [u.address.city, u.address?.state].filter(Boolean).join(", ") || undefined
-              : undefined;
+            : undefined;
           cache[producerId] = {
-            displayName: f?.farmName ?? f?.name ?? u?.displayName ?? undefined,
+            displayName: f?.farmName ?? f?.name ?? undefined,
             town: town || undefined,
             phone: f?.phone ?? undefined,
           };
@@ -325,6 +327,58 @@ export default function BuyerOrdersPage() {
     return "Not available";
   }
 
+  function canCancelOrder(order: Order) {
+    if (order.paymentMode !== "direct") return false;
+    if (!["awaiting_payment", "pending", "pending_payment", "new"].includes(String(order.status))) {
+      return false;
+    }
+    return !Object.values(order.producerStatuses || {}).some((entry) =>
+      ["accepted", "ready", "completed"].includes(String(entry?.status || ""))
+    );
+  }
+
+  async function cancelDirectOrder(orderId: string) {
+    try {
+      setPendingOrderId(orderId);
+      setNotice(null);
+      const cancelOrder = httpsCallable<{ orderId: string }, { status: string }>(
+        functions,
+        "cancelBuyerDirectOrder"
+      );
+      await cancelOrder({ orderId });
+      setNotice({ tone: "success", message: "Order cancelled and reserved inventory released." });
+    } catch (error: any) {
+      setNotice({
+        tone: "error",
+        message: error?.message || "The order could not be cancelled.",
+      });
+    } finally {
+      setPendingOrderId(null);
+    }
+  }
+
+  async function submitDispute() {
+    if (!disputeOrderId) return;
+    try {
+      setPendingOrderId(disputeOrderId);
+      const openDispute = httpsCallable<
+        { orderId: string; reason: string },
+        { disputeId: string; status: string }
+      >(functions, "openOrderDispute");
+      await openDispute({ orderId: disputeOrderId, reason: disputeReason.trim() });
+      setNotice({
+        tone: "success",
+        message: "Your order problem was sent to Maine Farm Market support.",
+      });
+      setDisputeOrderId(null);
+      setDisputeReason("");
+    } catch (error: any) {
+      setNotice({ tone: "error", message: error?.message || "Could not open the dispute." });
+    } finally {
+      setPendingOrderId(null);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#efe1b8] px-4 pb-24">
       <div className="max-w-4xl mx-auto pt-6">
@@ -338,6 +392,19 @@ export default function BuyerOrdersPage() {
           </button>
           <h1 className="text-2xl font-bold">Your Orders</h1>
         </div>
+
+        {notice && (
+          <div
+            role={notice.tone === "error" ? "alert" : "status"}
+            className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+              notice.tone === "error"
+                ? "border-red-200 bg-red-50 text-red-900"
+                : "border-emerald-200 bg-emerald-50 text-emerald-900"
+            }`}
+          >
+            {notice.message}
+          </div>
+        )}
 
         {loading && <div className="opacity-70">Loading…</div>}
 
@@ -383,6 +450,11 @@ export default function BuyerOrdersPage() {
                     <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
                       Payment is arranged directly with each producer. Confirm the
                       amount and accepted payment method before pickup or delivery.
+                      {o.reservationExpiresAt && o.status === "awaiting_payment" ? (
+                        <div className="mt-1 text-xs font-semibold">
+                          Producer acceptance deadline: {formatTimestamp(o.reservationExpiresAt)}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -464,7 +536,37 @@ export default function BuyerOrdersPage() {
                   )}
                 </div>
 
-                <div className="mt-3 pt-3 border-t flex justify-end">
+                <div className="mt-3 pt-3 border-t flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    {canCancelOrder(o) && (
+                      <button
+                        type="button"
+                        disabled={pendingOrderId === o.id}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              "Cancel this direct-payment order and release its reserved inventory?"
+                            )
+                          ) {
+                            void cancelDirectOrder(o.id);
+                          }
+                        }}
+                        className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 disabled:opacity-60"
+                      >
+                        {pendingOrderId === o.id ? "Cancelling..." : "Cancel order"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDisputeOrderId(o.id);
+                        setDisputeReason("");
+                      }}
+                      className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-semibold"
+                    >
+                      {o.disputeStatus === "open" ? "Add dispute details" : "Report a problem"}
+                    </button>
+                  </div>
                   <div className="font-bold">{formatMoney(totalCents)}</div>
                 </div>
               </div>
@@ -472,6 +574,38 @@ export default function BuyerOrdersPage() {
           })}
         </div>
       </div>
+
+      {disputeOrderId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl" role="dialog" aria-modal="true" aria-labelledby="dispute-title">
+            <h2 id="dispute-title" className="text-xl font-bold">Report an order problem</h2>
+            <p className="mt-2 text-sm text-stone-600">
+              Explain what happened. Maine Farm Market support will review the order and contact the involved accounts when needed.
+            </p>
+            <textarea
+              value={disputeReason}
+              onChange={(event) => setDisputeReason(event.target.value)}
+              maxLength={2000}
+              rows={6}
+              className="mt-4 w-full rounded-xl border border-stone-300 p-3"
+              placeholder="Describe the problem (at least 10 characters)"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setDisputeOrderId(null)} className="rounded-lg bg-stone-100 px-4 py-2 font-semibold">
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={disputeReason.trim().length < 10 || pendingOrderId === disputeOrderId}
+                onClick={() => void submitDispute()}
+                className="rounded-lg bg-emerald-800 px-4 py-2 font-semibold text-white disabled:opacity-50"
+              >
+                Submit problem
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
