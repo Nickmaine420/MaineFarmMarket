@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const {
   allocateRefundAcrossTransfers,
   assertProducerStatusTransition,
+  buildGooglePlayProducerMonthlyBasePlan,
   canBuyerCancelDirectOrder,
   directOrderInventoryState,
   directOrderReservationExpiry,
@@ -13,6 +14,41 @@ const {
   pendingDirectProducerIds,
   validateScheduledAt,
 } = require("../marketplace");
+
+test("Google Play producer plan is monthly, US-only, and $29.99 compatible", () => {
+  const plan = buildGooglePlayProducerMonthlyBasePlan({
+    currencyCode: "USD",
+    units: "29",
+    nanos: 990000000,
+  });
+  assert.equal(plan.basePlanId, "monthly");
+  assert.deepEqual(plan.regionalConfigs, [
+    {
+      regionCode: "US",
+      newSubscriberAvailability: true,
+      price: { currencyCode: "USD", units: "29", nanos: 990000000 },
+    },
+  ]);
+  assert.equal(plan.autoRenewingBasePlanType.billingPeriodDuration, "P1M");
+  assert.equal(plan.autoRenewingBasePlanType.gracePeriodDuration, "P7D");
+  assert.equal(plan.autoRenewingBasePlanType.accountHoldDuration, "P53D");
+  assert.equal(
+    plan.autoRenewingBasePlanType.resubscribeState,
+    "RESUBSCRIBE_STATE_ACTIVE"
+  );
+});
+
+test("Google Play producer plan rejects malformed regional prices", () => {
+  assert.throws(
+    () =>
+      buildGooglePlayProducerMonthlyBasePlan({
+        currencyCode: "EUR",
+        units: "29",
+        nanos: 990000000,
+      }),
+    /invalid United States price/
+  );
+});
 
 test("cart quantities are whole, positive, bounded, and merged by product", () => {
   assert.deepEqual(

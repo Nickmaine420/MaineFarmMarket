@@ -8,6 +8,41 @@ const DIRECT_ORDER_MAX_HOLD_MS = 24 * 60 * 60 * 1000;
 const DIRECT_ORDER_MIN_HOLD_MS = 30 * 60 * 1000;
 const DIRECT_ORDER_SCHEDULE_BUFFER_MS = 30 * 60 * 1000;
 
+function buildGooglePlayProducerMonthlyBasePlan(price) {
+  const currencyCode = String(price?.currencyCode || "").trim().toUpperCase();
+  const units = String(price?.units ?? "").trim();
+  const nanos = Number(price?.nanos || 0);
+  if (
+    currencyCode !== "USD" ||
+    !/^\d+$/.test(units) ||
+    !Number.isInteger(nanos) ||
+    nanos < 0 ||
+    nanos >= 1_000_000_000
+  ) {
+    throw new Error("Google Play returned an invalid United States price.");
+  }
+
+  return {
+    basePlanId: "monthly",
+    regionalConfigs: [
+      {
+        regionCode: "US",
+        newSubscriberAvailability: true,
+        price: { currencyCode, units, nanos },
+      },
+    ],
+    offerTags: [],
+    autoRenewingBasePlanType: {
+      billingPeriodDuration: "P1M",
+      gracePeriodDuration: "P7D",
+      accountHoldDuration: "P53D",
+      resubscribeState: "RESUBSCRIBE_STATE_ACTIVE",
+      prorationMode: "SUBSCRIPTION_PRORATION_MODE_CHARGE_ON_NEXT_BILLING_DATE",
+      legacyCompatible: true,
+    },
+  };
+}
+
 function normalizeRequestedItems(itemsInput) {
   if (!Array.isArray(itemsInput) || itemsInput.length === 0) {
     throw new Error("Cart is empty.");
@@ -185,6 +220,7 @@ module.exports = {
   MAX_CART_ITEMS,
   MAX_ITEM_QUANTITY,
   PICKUP_MIN_LEAD_MS,
+  buildGooglePlayProducerMonthlyBasePlan,
   allocateRefundAcrossTransfers,
   assertProducerStatusTransition,
   canBuyerCancelDirectOrder,

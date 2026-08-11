@@ -14,6 +14,7 @@ const { GoogleAuth } = require("google-auth-library");
 const {
   allocateRefundAcrossTransfers,
   assertProducerStatusTransition,
+  buildGooglePlayProducerMonthlyBasePlan,
   canBuyerCancelDirectOrder,
   directOrderInventoryState,
   directOrderReservationExpiry,
@@ -86,6 +87,7 @@ const PRODUCER_PRICE_ID = "price_1T3Jap1SYqHEo1MCwtv3riOT";
 const PRODUCER_TERMS_VERSION = "2026-07-25";
 const GOOGLE_PLAY_PACKAGE_NAME = "com.mainefarmmarket.app";
 const GOOGLE_PLAY_PRODUCER_PRODUCT_ID = "producer_monthly";
+const GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID = "monthly";
 const DIRECT_ORDER_MAX_PER_HOUR = 5;
 const DIRECT_ORDER_MAX_PER_DAY = 20;
 const ADMIN_EMAILS = new Set(["contactacontractorllc@gmail.com"]);
@@ -267,6 +269,144 @@ async function googlePlayRequest(options) {
   const client = await googlePlayAuth.getClient();
   return client.request(options);
 }
+
+function googlePlaySubscriptionProductUrl() {
+  return (
+    "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/" +
+    `${GOOGLE_PLAY_PACKAGE_NAME}/subscriptions/${GOOGLE_PLAY_PRODUCER_PRODUCT_ID}`
+  );
+}
+
+async function activateGooglePlayProducerBasePlan(productUrl) {
+  await googlePlayRequest({
+    method: "POST",
+    url:
+      `${productUrl}/basePlans/` +
+      `${GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID}:activate`,
+    data: {},
+  });
+  const verificationResponse = await googlePlayRequest({
+    method: "GET",
+    url: productUrl,
+  });
+  const verifiedPlan = (verificationResponse.data?.basePlans || []).find(
+    (plan) => plan?.basePlanId === GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID
+  );
+  if (verifiedPlan?.state !== "ACTIVE") {
+    throw new Error("Google Play created the producer base plan but did not activate it.");
+  }
+  return verifiedPlan;
+}
+
+async function ensureGooglePlayProducerBasePlan() {
+  const productUrl = googlePlaySubscriptionProductUrl();
+  const existingResponse = await googlePlayRequest({ method: "GET", url: productUrl });
+  const subscription = existingResponse.data || {};
+  const basePlans = Array.isArray(subscription.basePlans)
+    ? subscription.basePlans
+    : [];
+  const existingPlan = basePlans.find(
+    (plan) => plan?.basePlanId === GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID
+  );
+
+  if (existingPlan) {
+    let state = existingPlan.state || "STATE_UNSPECIFIED";
+    let activated = false;
+    if (state === "DRAFT") {
+      const activatedPlan = await activateGooglePlayProducerBasePlan(productUrl);
+      state = activatedPlan.state;
+      activated = true;
+    }
+    return {
+      basePlanId: GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID,
+      state,
+      created: false,
+      activated,
+    };
+  }
+  if (basePlans.length > 0) {
+    throw new Error(
+      "A different Google Play base plan already exists; refusing to replace it automatically."
+    );
+  }
+
+  const convertedPricesResponse = await googlePlayRequest({
+    method: "POST",
+    url:
+      "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/" +
+      `${GOOGLE_PLAY_PACKAGE_NAME}/pricing:convertRegionPrices`,
+    data: {
+      price: {
+        currencyCode: "USD",
+        units: "29",
+        nanos: 990000000,
+      },
+    },
+  });
+  const conversion = convertedPricesResponse.data || {};
+  const regionsVersion = String(conversion.regionVersion?.version || "").trim();
+  const unitedStatesPrice = conversion.convertedRegionPrices?.US?.price;
+  if (!regionsVersion || !unitedStatesPrice) {
+    throw new Error("Google Play did not return a current United States regional price.");
+  }
+
+  const basePlan = buildGooglePlayProducerMonthlyBasePlan(unitedStatesPrice);
+  const patchResponse = await googlePlayRequest({
+    method: "PATCH",
+    url: productUrl,
+    params: {
+      updateMask: "basePlans",
+      "regionsVersion.version": regionsVersion,
+    },
+    data: {
+      packageName: GOOGLE_PLAY_PACKAGE_NAME,
+      productId: GOOGLE_PLAY_PRODUCER_PRODUCT_ID,
+      basePlans: [basePlan],
+    },
+  });
+  const createdPlan = (patchResponse.data?.basePlans || []).find(
+    (plan) => plan?.basePlanId === GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID
+  );
+  if (!createdPlan) {
+    throw new Error("Google Play did not return the newly created producer base plan.");
+  }
+
+  let finalState = createdPlan.state || "STATE_UNSPECIFIED";
+  let activated = false;
+  if (finalState !== "ACTIVE") {
+    const activatedPlan = await activateGooglePlayProducerBasePlan(productUrl);
+    finalState = activatedPlan.state;
+    activated = true;
+  }
+
+  return {
+    basePlanId: GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID,
+    state: finalState,
+    created: true,
+    activated,
+  };
+}
+
+exports.ensureGooglePlayProducerBasePlan = onCall(
+  { timeoutSeconds: 120 },
+  async (request) => {
+    assertAdmin(request);
+    return ensureGooglePlayProducerBasePlan();
+  }
+);
+
+exports.ensureGooglePlayProducerBasePlanScheduled = onSchedule(
+  {
+    schedule: "every 24 hours",
+    timeZone: "America/New_York",
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const result = await ensureGooglePlayProducerBasePlan();
+    console.info("[ensureGooglePlayProducerBasePlanScheduled]", result);
+    return result;
+  }
+);
 
 async function fetchGooglePlaySubscription(purchaseToken) {
   const encodedToken = encodeURIComponent(purchaseToken);
