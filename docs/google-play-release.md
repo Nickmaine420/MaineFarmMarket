@@ -4,8 +4,8 @@
 
 - Application ID: `com.mainefarmmarket.app`
 - Firebase Android app ID: `1:275379861196:android:52532d7cdfc236f9013469`
-- Version name: `1.6`
-- Version code: `7`
+- Version name: `1.8`
+- Version code: `9`
 - Target SDK: 36
 
 ## Build
@@ -35,7 +35,7 @@ management follows the provider originally used by the producer.
 
 ## Before production rollout
 
-1. Upload the signed AAB to an internal testing track.
+1. Upload the signed AAB to the active closed testing track.
 2. Confirm both the upload-key and Play app-signing SHA-1/SHA-256 certificates are
    registered on the Firebase Android app before testing Google sign-in.
 3. Complete the Data safety, privacy policy, app access, content rating, and account

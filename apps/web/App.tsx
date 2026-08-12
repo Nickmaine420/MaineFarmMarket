@@ -625,66 +625,136 @@ const SubscribeCancel: React.FC = () => {
 // --- Header ---
 const Header = () => {
   const { user, logout } = useAuth();
+  const location = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [location.pathname]);
+
+  const accountName = user?.displayName || user?.email;
+
+  const signedInLinks = user ? (
+    <>
+      <Link to="/account" className="mfm-nav-link">
+        Account & safety
+      </Link>
+      {isAdminEmail(user.email) && (
+        <Link to="/admin" className="mfm-nav-link text-amber-800">
+          Administration
+        </Link>
+      )}
+      {user.role === UserRole.PRODUCER && (
+        <Link to="/producer/payouts" className="mfm-nav-link">
+          Optional Stripe payouts
+        </Link>
+      )}
+      <button
+        type="button"
+        onClick={() => void logout()}
+        className="mfm-nav-link text-left text-red-700"
+      >
+        Sign out
+      </button>
+    </>
+  ) : (
+    <Link
+      to="/"
+      className="rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-extrabold text-white"
+    >
+      Sign in
+    </Link>
+  );
 
   return (
-    <header className="bg-white/70 backdrop-blur border-b border-stone-200 sticky top-0 z-50">
-      <div className="max-w-7xl mx-auto px-4 py-2 flex flex-wrap items-center justify-between gap-3">
-        <Link to="/" className="shrink-0">
-          <img src="/mfm-logo.png" alt="Maine Farm Market" className="h-14 md:h-16 w-auto object-contain" />
+    <header className="mfm-app-header sticky top-0 z-50 border-b border-stone-200 bg-white/95 shadow-sm backdrop-blur">
+      <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-3 px-4 py-2">
+        <Link
+          to="/"
+          aria-label="Maine Farm Market home"
+          className="flex min-w-0 items-center gap-3"
+        >
+          <img
+            src="/mfm-logo.png"
+            alt=""
+            className="h-12 w-12 shrink-0 rounded-full object-cover"
+          />
+          <span className="truncate text-base font-extrabold tracking-tight text-emerald-950 sm:text-lg">
+            Maine Farm Market
+          </span>
         </Link>
 
-        <div className="flex flex-1 flex-wrap justify-end items-center gap-3">
-          <div className="flex items-center gap-3">
-            <Link to="/contact" className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
-              Contact
+        <nav aria-label="Primary navigation" className="hidden items-center gap-1 md:flex">
+          <Link to="/contact" className="mfm-nav-link">
+            Contact
+          </Link>
+          <a href="/privacy.html" className="mfm-nav-link">
+            Privacy
+          </a>
+          {user && (
+            <span
+              className="max-w-40 truncate px-2 text-sm font-medium text-stone-600"
+              title={accountName || undefined}
+            >
+              {accountName}
+            </span>
+          )}
+          {signedInLinks}
+        </nav>
+
+        <button
+          type="button"
+          aria-expanded={menuOpen}
+          aria-controls="mobile-navigation"
+          aria-label={menuOpen ? "Close navigation menu" : "Open navigation menu"}
+          onClick={() => setMenuOpen((open) => !open)}
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-stone-200 bg-white text-emerald-950 md:hidden"
+        >
+          {menuOpen ? (
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              className="h-6 w-6 fill-none stroke-current"
+              strokeWidth="2"
+            >
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          ) : (
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              className="h-6 w-6 fill-none stroke-current"
+              strokeWidth="2"
+            >
+              <path d="M4 7h16M4 12h16M4 17h16" />
+            </svg>
+          )}
+        </button>
+      </div>
+
+      {menuOpen && (
+        <nav
+          id="mobile-navigation"
+          aria-label="Mobile navigation"
+          className="border-t border-stone-200 bg-white px-4 pb-4 pt-3 md:hidden"
+        >
+          {user && (
+            <p className="mb-3 truncate rounded-xl bg-stone-100 px-3 py-2 text-sm text-stone-600">
+              Signed in as{" "}
+              <span className="font-semibold text-stone-800">{accountName}</span>
+            </p>
+          )}
+          <div className="grid gap-1">
+            <Link to="/contact" className="mfm-nav-link">
+              Contact & support
             </Link>
-            <a href="/privacy.html" className="text-sm font-bold text-emerald-700 hover:text-emerald-800">
+            <a href="/privacy.html" className="mfm-nav-link">
               Privacy
             </a>
+            {signedInLinks}
           </div>
-
-          {user ? (
-            <div className="flex flex-wrap items-center justify-end gap-3">
-              <span className="text-sm font-medium text-stone-700">
-                {user.displayName || user.email}
-              </span>
-
-              <Link
-                to="/account"
-                className="text-sm font-bold text-emerald-700 hover:text-emerald-800"
-              >
-                Account
-              </Link>
-
-              {isAdminEmail(user.email) && (
-                <Link
-                  to="/admin"
-                  className="text-sm font-bold text-amber-700 hover:text-amber-800"
-                >
-                  Administration
-                </Link>
-              )}
-
-              {user.role === UserRole.PRODUCER && (
-                <Link
-                  to="/producer/payouts"
-                  className="text-sm font-bold text-emerald-700 hover:text-emerald-800"
-                >
-                  Optional Stripe payouts
-                </Link>
-              )}
-
-              <button onClick={logout} className="text-sm text-red-700 font-bold hover:text-red-800">
-                Sign Out
-              </button>
-            </div>
-          ) : (
-            <Link to="/" className="rounded-lg bg-emerald-800 px-4 py-2 text-sm font-bold text-white">
-              Sign in
-            </Link>
-          )}
-        </div>
-      </div>
+        </nav>
+      )}
     </header>
   );
 };

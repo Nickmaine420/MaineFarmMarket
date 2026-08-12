@@ -100,7 +100,7 @@ function formatWhen(ts: any): string {
 }
 
 const ProducerDashboard = () => {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [view, setView] = useState<'overview' | 'products' | 'orders' | 'farm'>('products');
   const [creating, setCreating] = useState(false);
 
@@ -424,33 +424,25 @@ const ProducerDashboard = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
-      {/* ✅ Mobile-safe header: stacks on small screens */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-10">
         <div>
           <h2 className="text-4xl font-serif text-stone-800">Farm Manager</h2>
           <div className="text-stone-500 mt-1">Signed in as: {user.displayName || user.email}</div>
         </div>
 
-        {/* ✅ Wraps buttons instead of overflowing */}
         <div className="flex flex-wrap gap-3 justify-start sm:justify-end">
           <button
             onClick={() => setCreating(true)}
-            className="bg-[#2f4a2e] text-white px-6 py-3 rounded-xl font-bold hover:opacity-90 transition shadow-lg"
+            className="min-h-12 flex-1 whitespace-nowrap rounded-xl bg-[#2f4a2e] px-6 py-3 font-bold text-white shadow-lg transition hover:opacity-90 sm:flex-none"
           >
             + New Listing
           </button>
           <button
             onClick={openBillingPortal}
             disabled={portalLoading}
-            className="bg-stone-200 text-stone-800 px-6 py-3 rounded-xl font-bold hover:bg-stone-300 transition disabled:opacity-60"
+            className="min-h-12 flex-1 whitespace-nowrap rounded-xl bg-stone-200 px-6 py-3 font-bold text-stone-800 transition hover:bg-stone-300 disabled:opacity-60 sm:flex-none"
           >
             {portalLoading ? 'Opening…' : 'Manage Subscription'}
-          </button>
-          <button
-            onClick={logout}
-            className="bg-stone-200 text-stone-800 px-6 py-3 rounded-xl font-bold hover:bg-stone-300 transition"
-          >
-            Logout
           </button>
         </div>
       </div>
@@ -471,7 +463,7 @@ const ProducerDashboard = () => {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-        <div className="lg:col-span-1 space-y-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:col-span-1 lg:block lg:space-y-2">
           <button onClick={() => setView('overview')} className={`w-full text-left px-6 py-4 rounded-xl font-semibold transition ${view === 'overview' ? 'bg-green-100 text-green-800' : 'text-stone-600 hover:bg-stone-100'}`}>Dashboard</button>
           <button onClick={() => setView('products')} className={`w-full text-left px-6 py-4 rounded-xl font-semibold transition ${view === 'products' ? 'bg-green-100 text-green-800' : 'text-stone-600 hover:bg-stone-100'}`}>Products</button>
           <button onClick={() => setView('orders')} className={`w-full text-left px-6 py-4 rounded-xl font-semibold transition ${view === 'orders' ? 'bg-green-100 text-green-800' : 'text-stone-600 hover:bg-stone-100'}`}>Orders {stats.newOrders > 0 ? `(${stats.newOrders})` : ''}</button>

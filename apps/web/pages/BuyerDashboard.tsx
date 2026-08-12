@@ -12,7 +12,6 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
-import { useAuth } from "../App";
 
 type AnyDoc = Record<string, any>;
 
@@ -115,8 +114,6 @@ function clearLocalCartKeys() {
 
 export default function BuyerDashboard() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
-
   const [products, setProducts] = useState<any[]>([]);
   const [farms, setFarms] = useState<Record<string, AnyDoc>>({});
   const [marketLoading, setMarketLoading] = useState(true);
@@ -575,12 +572,6 @@ export default function BuyerDashboard() {
               My Orders
             </button>
 
-            <button
-              onClick={() => logout()}
-              className="bg-white px-4 py-2 rounded-full font-bold border border-stone-200"
-            >
-              Sign Out
-            </button>
           </div>
         </div>
 

@@ -11,6 +11,12 @@
     @apply m-0 min-w-80 bg-[#f3e7c6] font-sans text-stone-900 antialiased;
   }
 
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
   button,
   a,
   input,
@@ -21,5 +27,15 @@
 
   button {
     @apply touch-manipulation;
+  }
+}
+
+@layer components {
+  .mfm-app-header {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .mfm-nav-link {
+    @apply min-h-11 rounded-lg px-3 py-2.5 text-sm font-bold text-emerald-800 transition hover:bg-emerald-50 hover:text-emerald-950;
   }
 }

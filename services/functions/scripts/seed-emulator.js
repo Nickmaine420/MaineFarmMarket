@@ -18,6 +18,7 @@ const db = getFirestore();
 const auth = getAuth();
 const now = Timestamp.now();
 const password = "MfmEmulatorTest2026!";
+const buyerIncomplete = process.argv.includes("--buyer-incomplete");
 
 async function resetFirestoreEmulator() {
   const projectId = process.env.GCLOUD_PROJECT;
@@ -102,11 +103,11 @@ async function main() {
     role: "buyer",
     displayName: "Test Maine Buyer",
     email: "buyer-test@mainefarmmarket.local",
-    buyerProfileComplete: true,
-    buyerAddress: "1 Test Lane",
-    buyerCity: "Waterville",
+    buyerProfileComplete: !buyerIncomplete,
+    buyerAddress: buyerIncomplete ? "" : "1 Test Lane",
+    buyerCity: buyerIncomplete ? "" : "Waterville",
     buyerState: "ME",
-    buyerZip: "04901",
+    buyerZip: buyerIncomplete ? "" : "04901",
     acceptedUserAgreement: true,
     acceptedUserAgreementAt: now,
     userAgreementAcceptedAt: now,
@@ -230,7 +231,7 @@ async function main() {
 
   await batch.commit();
   console.log(
-    "Seeded emulator buyer, producer, farm, listing, cart, and direct-payment order."
+    `Seeded emulator ${buyerIncomplete ? "first-time " : ""}buyer, producer, farm, listing, cart, and direct-payment order.`
   );
 }
 

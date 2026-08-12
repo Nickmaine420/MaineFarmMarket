@@ -1,18 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
-function seedEmulators() {
-  if (process.platform === "win32") {
-    execFileSync(
-      process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe",
-      ["/d", "/s", "/c", "npm.cmd --prefix ../../services/functions run seed:emulator"],
-      { cwd: process.cwd(), env: process.env, stdio: "inherit" }
-    );
-    return;
-  }
+function seedEmulators(options: { buyerIncomplete?: boolean } = {}) {
   execFileSync(
-    "npm",
-    ["--prefix", "../../services/functions", "run", "seed:emulator"],
+    process.execPath,
+    [
+      "../../services/functions/scripts/seed-emulator.js",
+      ...(options.buyerIncomplete ? ["--buyer-incomplete"] : []),
+    ],
     { cwd: process.cwd(), env: process.env, stdio: "inherit" }
   );
 }
@@ -47,7 +42,7 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await page.goto("/#/");
     await page.getByRole("button", { name: /Start Selling/ }).click();
     await expect(page.getByRole("heading", { name: "Farm Manager" })).toBeVisible();
-    await page.getByRole("button", { name: "Orders", exact: true }).click();
+    await page.getByRole("button", { name: /^Orders(?: \(\d+\))?$/ }).click();
     await expect(page.getByText(/Arrange payment directly with the buyer/)).toBeVisible();
     await page.getByRole("button", { name: "Accept", exact: true }).first().click();
     await expect(page.getByText(/Order .* ACCEPTED/)).toBeVisible();
@@ -69,5 +64,63 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await expect(page.getByRole("heading", { name: "Your Orders" })).toBeVisible();
     await expect(page.getByText(/Payment is arranged directly/).first()).toBeVisible();
     await expect(page.getByText(/Producer acceptance deadline/).first()).toBeVisible();
+  });
+
+  test("first-time buyer completes setup without a loading or redirect loop", async ({ page }) => {
+    seedEmulators({ buyerIncomplete: true });
+    await page.goto("/#/");
+    await page.getByRole("button", { name: /Shop the Market/ }).click();
+
+    await expect(
+      page.getByRole("heading", { name: "Welcome to Maine Farm Market" })
+    ).toBeVisible();
+    await page.getByLabel("Mailing address").fill("12 Test Farm Road");
+    await page.getByLabel("City or town").fill("Waterville");
+    await page.getByLabel("ZIP code").fill("04901");
+    await page.getByRole("button", { name: "Save and start shopping" }).click();
+
+    await expect(page.getByRole("heading", { name: "Fresh from Maine" })).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByText("Loading your buyer setup…")).toHaveCount(0);
+  });
+
+  test("mobile navigation is compact, complete, and does not duplicate sign out", async ({
+    page,
+  }, testInfo) => {
+    test.skip(!testInfo.project.name.includes("mobile"), "Mobile navigation check");
+    await page.goto("/#/");
+    await page.getByRole("button", { name: /Shop the Market/ }).click();
+    await expect(page.getByRole("heading", { name: "Fresh from Maine" })).toBeVisible();
+
+    const menu = page.getByRole("button", { name: "Open navigation menu" });
+    await expect(menu).toBeVisible();
+    await menu.click();
+    await expect(page.getByRole("link", { name: "Contact & support" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Account & safety" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(1);
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test("producer dashboard actions and navigation fit a mobile viewport", async ({
+    page,
+  }, testInfo) => {
+    test.skip(!testInfo.project.name.includes("mobile"), "Mobile producer layout check");
+    await page.goto("/#/");
+    await page.getByRole("button", { name: /Start Selling/ }).click();
+    await expect(page.getByRole("heading", { name: "Farm Manager" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "+ New Listing" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Manage Subscription" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Products", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Orders(?: \(\d+\))?$/ })).toBeVisible();
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
   });
 });
