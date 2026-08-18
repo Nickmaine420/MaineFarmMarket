@@ -13,6 +13,8 @@ import {
   doc,
   updateDoc,
   serverTimestamp,
+  deleteField,
+  Timestamp,
 } from 'firebase/firestore';
 import { isNativeAndroidApp } from '../utils/platform';
 import {
@@ -20,6 +22,7 @@ import {
   GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
   PlayBilling,
 } from '../services/playBilling';
+import { activeProductDiscount, salePriceFromPercent } from '../utils/marketplaceFeatures';
 
 type Product = {
   id: string;
@@ -35,6 +38,10 @@ type Product = {
   producerId?: string;
   ownerId?: string;
   priceCents?: number;
+  originalPrice?: number;
+  originalPriceCents?: number;
+  discountLabel?: string;
+  discountEndsAt?: any;
   producerName?: string;
   imageUrl?: string;
   archived?: boolean;
@@ -61,6 +68,7 @@ type Fulfillment = {
   deliveryDate?: string;
   deliveryTime?: string;
   notes?: string;
+  pickupPartner?: { producerId?: string; farmName?: string; city?: string; state?: string; phone?: string; hours?: string } | null;
   window?: { id?: string; label?: string; startTime?: string; endTime?: string };
 };
 
@@ -125,6 +133,9 @@ const ProducerDashboard = () => {
   const [editPrice, setEditPrice] = useState('');
   const [editQty, setEditQty] = useState('');
   const [editUnit, setEditUnit] = useState('each');
+  const [editDiscountPercent, setEditDiscountPercent] = useState('');
+  const [editDiscountLabel, setEditDiscountLabel] = useState('');
+  const [editDiscountEndsAt, setEditDiscountEndsAt] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<Product | null>(null);
   const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
@@ -173,11 +184,16 @@ const ProducerDashboard = () => {
   }, [products, orders]);
 
   const openEdit = (p: Product) => {
+    const discount = activeProductDiscount(p);
     setEditing(p);
     setEditTitle(p.title || '');
-    setEditPrice(String(p.price ?? ''));
+    setEditPrice(String((p.originalPriceCents ?? p.priceCents ?? 0) / 100 || p.price || ''));
     setEditQty(String(p.quantityAvailable ?? ''));
     setEditUnit(p.unit || 'each');
+    setEditDiscountPercent(discount ? String(discount.percent) : '');
+    setEditDiscountLabel(p.discountLabel || '');
+    const endDate = p.discountEndsAt?.toDate?.() || null;
+    setEditDiscountEndsAt(endDate ? new Date(endDate.getTime() - endDate.getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : '');
   };
 
   const closeEdit = () => {
@@ -198,6 +214,24 @@ const ProducerDashboard = () => {
       setNotice({ tone: "error", message: "Enter a price greater than $0." });
       return;
     }
+    const regularPriceCents = Math.round(priceNum * 100);
+    const requestedDiscount = editDiscountPercent.trim() === '' ? 0 : Number(editDiscountPercent);
+    if (!Number.isInteger(requestedDiscount) || requestedDiscount < 0 || requestedDiscount > 90) {
+      setNotice({ tone: "error", message: "Discount must be a whole percentage from 1 to 90, or left blank." });
+      return;
+    }
+    const salePriceCents = requestedDiscount > 0
+      ? salePriceFromPercent(regularPriceCents, requestedDiscount)
+      : regularPriceCents;
+    if (salePriceCents == null) {
+      setNotice({ tone: "error", message: "The discount could not be calculated." });
+      return;
+    }
+    const discountEnd = editDiscountEndsAt ? new Date(editDiscountEndsAt) : null;
+    if (discountEnd && (!Number.isFinite(discountEnd.getTime()) || discountEnd.getTime() <= Date.now())) {
+      setNotice({ tone: "error", message: "Choose a discount end time in the future." });
+      return;
+    }
 
     const qtyNum = Number(editQty);
     if (!Number.isInteger(qtyNum) || qtyNum < 0) {
@@ -209,8 +243,12 @@ const ProducerDashboard = () => {
       setSavingEdit(true);
       await updateDoc(doc(db, 'products', editing.id), {
         title,
-        price: priceNum,
-        priceCents: Math.round(priceNum * 100),
+        price: salePriceCents / 100,
+        priceCents: salePriceCents,
+        originalPrice: requestedDiscount > 0 ? regularPriceCents / 100 : deleteField(),
+        originalPriceCents: requestedDiscount > 0 ? regularPriceCents : deleteField(),
+        discountLabel: requestedDiscount > 0 ? editDiscountLabel.trim() : deleteField(),
+        discountEndsAt: requestedDiscount > 0 && discountEnd ? Timestamp.fromDate(discountEnd) : deleteField(),
         quantityAvailable: qtyNum,
         unit: editUnit,
         inStock: qtyNum > 0,
@@ -362,7 +400,11 @@ const ProducerDashboard = () => {
       o.fulfillment?.method ??
       o.fulfillment?.fulfillmentMethod ??
       (o.deliveryMethod === "delivery" ? "delivery" : "pickup");
-    const label = method === "delivery" ? "Delivery" : "Pickup";
+    const label = method === "delivery"
+      ? "Delivery"
+      : o.fulfillment?.pickupPartner?.farmName
+        ? `Partner pickup at ${o.fulfillment.pickupPartner.farmName}`
+        : "Pickup";
 
     let when = "";
     if (o.scheduledAt && String(o.scheduledAt).trim()) {
@@ -387,7 +429,14 @@ const ProducerDashboard = () => {
     }
     if (!when) when = "Not specified";
 
-    const notes = (o.fulfillment?.notes ?? o.notes ?? "").trim();
+    const partnerDetails = o.fulfillment?.pickupPartner
+      ? [o.fulfillment.pickupPartner.city, o.fulfillment.pickupPartner.state, o.fulfillment.pickupPartner.phone]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
+    const notes = [(o.fulfillment?.notes ?? o.notes ?? "").trim(), partnerDetails]
+      .filter(Boolean)
+      .join(" · ");
     return { label, when, notes };
   };
 
@@ -533,6 +582,7 @@ const ProducerDashboard = () => {
                         <div className="text-stone-600">
                           {(p.department || 'Other')}{p.category ? ` • ${p.category}` : ''} • ${Number(p.price ?? 0).toFixed(2)} / {p.unit || 'each'} • Qty: {p.quantityAvailable ?? 0}
                         </div>
+                        {activeProductDiscount(p) && <div className="mt-1 text-sm font-bold text-red-700">{activeProductDiscount(p)?.percent}% discount · regular ${(Number(p.originalPriceCents || 0) / 100).toFixed(2)}{p.discountLabel ? ` · ${p.discountLabel}` : ''}</div>}
                       </div>
 
                       {/* ✅ Buttons wrap and take full row on mobile (no overlap) */}
@@ -694,13 +744,22 @@ const ProducerDashboard = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-semibold mb-1">Price</label>
+                <label className="block text-sm font-semibold mb-1">Regular price</label>
                 <input type="number" step="0.01" min="0" className="border p-2 w-full rounded" value={editPrice} onChange={e => setEditPrice(e.target.value)} />
               </div>
 
               <div>
                 <label className="block text-sm font-semibold mb-1">Quantity</label>
                 <input type="number" step="1" min="0" className="border p-2 w-full rounded" value={editQty} onChange={e => setEditQty(e.target.value)} />
+              </div>
+            </div>
+
+            <div className="mb-4 rounded-xl border border-orange-200 bg-orange-50 p-4">
+              <div className="font-bold text-orange-950">Optional discount</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-sm font-semibold">Discount percent<input type="number" min="1" max="90" step="1" className="mt-1 w-full rounded border p-2 font-normal" value={editDiscountPercent} onChange={e => setEditDiscountPercent(e.target.value)} placeholder="20" /></label>
+                <label className="text-sm font-semibold">Marketing label<input maxLength={80} className="mt-1 w-full rounded border p-2 font-normal" value={editDiscountLabel} onChange={e => setEditDiscountLabel(e.target.value)} placeholder="Weekend special" /></label>
+                <label className="text-sm font-semibold sm:col-span-2">Discount ends (optional)<input type="datetime-local" className="mt-1 w-full rounded border p-2 font-normal" value={editDiscountEndsAt} onChange={e => setEditDiscountEndsAt(e.target.value)} /></label>
               </div>
             </div>
 

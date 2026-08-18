@@ -20,6 +20,17 @@ service firebase.storage {
       allow delete: if request.auth != null && request.auth.uid == userId;
     }
 
+    match /producerProfiles/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && activeProducer(userId)
+        && request.resource.size <= 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp|heic|heif)');
+      // Profile photos are hidden/archived in Firestore rather than destroyed.
+      allow delete: if false;
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

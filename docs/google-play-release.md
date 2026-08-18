@@ -4,8 +4,8 @@
 
 - Application ID: `com.mainefarmmarket.app`
 - Firebase Android app ID: `1:275379861196:android:52532d7cdfc236f9013469`
-- Version name: `1.9`
-- Version code: `10`
+- Version name: `2.0`
+- Version code: `11`
 - Target SDK: 36
 
 ## Build
@@ -25,6 +25,15 @@ apps/mobile/android/app/build/outputs/bundle/release/app-release.aab
 The signing properties and upload keystore are intentionally excluded from Git. Keep
 the original private upload key and its password backup secure. The public upload
 certificate may be supplied to Google Play when requested.
+
+## Version 2.0 tester notes
+
+- Discover Maine events in a calendar with date, goods, producer, and distance filters.
+- Open public producer profiles with photos, products, events, recommendations, and partners.
+- Find producer promotion pages, scheduled deals, and clearly marked product discounts.
+- Producers can publish events and promotions, recommend other producers, and form mutual
+  pickup or delivery partnerships.
+- Buyers can choose an accepted partner farm as a pickup location when ordering.
 
 ## Subscription behavior
 

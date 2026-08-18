@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { httpsCallable } from "firebase/functions";
 import { auth, db, functions } from "../firebase";
 import { useNavigate } from "../router";
-import { doc, onSnapshot, runTransaction, serverTimestamp, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, onSnapshot, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
 type CartItem = {
@@ -21,6 +21,8 @@ type CartItem = {
 type CartState = {
   items: CartItem[];
 };
+
+type PickupPartnerOption = { producerId: string; farmName: string; city: string };
 
 const CART_KEY = "mfm_cart"; // legacy local storage key
 const LEGACY_CART_KEY = "mfm_cart_items"; // older legacy key
@@ -146,6 +148,10 @@ export default function CartPage() {
     Record<string, { pickupAvailable: boolean; deliveryAvailable: boolean; farmName: string }>
   >({});
   const [availability, setAvailability] = useState<Record<string, number>>({});
+  const [pickupPartners, setPickupPartners] = useState<
+    Record<string, PickupPartnerOption[]>
+  >({});
+  const [selectedPickupPartners, setSelectedPickupPartners] = useState<Record<string, string>>({});
 
   const didMigrateRef = useRef(false);
 
@@ -285,11 +291,53 @@ export default function CartPage() {
           ] as const;
         })
       ),
+      Promise.all(
+        producerIds.map(async (producerId) => {
+          const partnershipSnapshot = await getDocs(
+            query(
+              collection(db, "producerPartnerships"),
+              where("memberIds", "array-contains", producerId),
+              where("status", "==", "accepted")
+            )
+          );
+          const accepted = partnershipSnapshot.docs
+            .map((partnership) => partnership.data())
+            .filter((partnership) => partnership.status === "accepted" && partnership.pickupEnabled === true);
+          const partnerIds = accepted
+            .map((partnership) => partnership.memberIds.find((id: string) => id !== producerId))
+            .filter(Boolean) as string[];
+          const partnerFarms = await Promise.all(
+            partnerIds.map(async (partnerId) => {
+              const snapshot = await getDoc(doc(db, "farms", partnerId));
+              const farm = snapshot.exists() ? snapshot.data() : {};
+              return farm.pickupAvailable === false
+                ? null
+                : {
+                    producerId: partnerId,
+                    farmName: String(farm.farmName || "Producer partner"),
+                    city: String(farm.city || ""),
+                  };
+            })
+          );
+          return [producerId, partnerFarms.filter(Boolean)] as const;
+        })
+      ),
     ])
-      .then(([productEntries, farmEntries]) => {
+      .then(([productEntries, farmEntries, partnerEntries]) => {
         if (cancelled) return;
         setAvailability(Object.fromEntries(productEntries));
         setFarmOptions(Object.fromEntries(farmEntries));
+        const nextPartners = Object.fromEntries(partnerEntries) as Record<string, PickupPartnerOption[]>;
+        setPickupPartners(nextPartners);
+        setSelectedPickupPartners((current) => {
+          const next = { ...current };
+          farmEntries.forEach(([producerId, farm]) => {
+            if (farm.pickupAvailable === false && !next[producerId] && nextPartners[producerId]?.[0]) {
+              next[producerId] = nextPartners[producerId][0].producerId;
+            }
+          });
+          return next;
+        });
       })
       .catch((error) => {
         console.error("Could not refresh cart availability:", error);
@@ -304,9 +352,9 @@ export default function CartPage() {
     () =>
       Object.keys(farmOptions).length > 0 &&
       Object.keys(farmOptions).every(
-        (producerId) => farmOptions[producerId].pickupAvailable
+        (producerId) => farmOptions[producerId].pickupAvailable || (pickupPartners[producerId]?.length || 0) > 0
       ),
-    [farmOptions]
+    [farmOptions, pickupPartners]
   );
   const allDeliveryAvailable = useMemo(
     () =>
@@ -481,12 +529,15 @@ export default function CartPage() {
       ] as string[];
       const perProducer: Record<
         string,
-        { fulfillmentMethod: "pickup" | "delivery"; selectedWindowId: string }
+        { fulfillmentMethod: "pickup" | "delivery"; selectedWindowId: string; pickupPartnerId?: string }
       > = {};
       uniqueProducerIds.forEach((producerId) => {
         perProducer[producerId] = {
           fulfillmentMethod: deliveryMethod,
           selectedWindowId: "customer-selected",
+          ...(deliveryMethod === "pickup" && selectedPickupPartners[producerId]
+            ? { pickupPartnerId: selectedPickupPartners[producerId] }
+            : {}),
         };
       });
 
@@ -687,6 +738,28 @@ export default function CartPage() {
                 Delivery is unavailable because at least one producer in this cart only
                 offers pickup.
               </p>
+            )}
+
+            {deliveryMethod === "pickup" && (Object.values(pickupPartners) as PickupPartnerOption[][]).some((options) => options.length > 0) && (
+              <section className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                <h3 className="font-bold text-emerald-950">Partner pickup locations</h3>
+                <p className="mt-1 text-sm text-emerald-900">Accepted producer partnerships can offer another convenient pickup location. The selected partner is verified again when the order is placed.</p>
+                <div className="mt-3 space-y-3">
+                  {(Object.entries(pickupPartners) as Array<[string, PickupPartnerOption[]]>).filter(([, options]) => options.length > 0).map(([producerId, options]) => (
+                    <label key={producerId} className="block text-sm font-bold text-emerald-950">
+                      {farmOptions[producerId]?.farmName || "Producer"}
+                      <select
+                        value={selectedPickupPartners[producerId] || ""}
+                        onChange={(event) => setSelectedPickupPartners((current) => ({ ...current, [producerId]: event.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-emerald-300 bg-white p-3 font-normal text-stone-900"
+                      >
+                        {farmOptions[producerId]?.pickupAvailable && <option value="">Pickup directly from producer</option>}
+                        {options.map((partner) => <option key={partner.producerId} value={partner.producerId}>Pickup at {partner.farmName}{partner.city ? ` · ${partner.city}` : ""}</option>)}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              </section>
             )}
 
             <div className="mt-3">

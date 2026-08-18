@@ -16,6 +16,10 @@ import ContactPage from "./pages/ContactPage";
 import AccountPage from "./pages/AccountPage";
 import OrderSuccessPage from "./pages/OrderSuccessPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
+import EventsPage from "./pages/EventsPage";
+import PromotionsPage from "./pages/PromotionsPage";
+import PublicProducerProfilePage from "./pages/PublicProducerProfilePage";
+import ProducerGrowthPage from "./pages/ProducerGrowthPage";
 import { isAdminEmail } from "./utils/admin";
 
 import { auth, db, functions, isFirebaseEmulatorMode } from './firebase';
@@ -29,6 +33,7 @@ import { isNativeAndroidApp } from './utils/platform';
 import { signInWithGoogleAccountChooser } from './services/googleSignIn';
 import {
   AppNavigationIcon,
+  bottomNavigationItemsForRole,
   isNavigationTargetActive,
   navigationItemsForRole,
 } from './utils/navigation';
@@ -631,6 +636,9 @@ const NavigationIcon = ({ icon }: { icon: AppNavigationIcon }) => {
     dashboard: <><path d="M4 4h6v7H4zM14 4h6v4h-6zM14 12h6v8h-6zM4 15h6v5H4z"/></>,
     products: <><path d="m4 8 8-4 8 4-8 4z"/><path d="M4 8v8l8 4 8-4V8M12 12v8"/></>,
     farm: <><path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></>,
+    events: <><path d="M5 4h14v16H5zM8 2v4M16 2v4M5 9h14"/><path d="M9 13h2v2H9zM14 13h2v2h-2z"/></>,
+    promotions: <><path d="m4 13 10-5v8L4 13zM14 10l4-2v8l-4-2M6 14l1 6h3l-1-5"/></>,
+    growth: <><path d="M4 19V9M10 19V5M16 19v-8M3 19h18"/><path d="m4 8 5-4 6 5 5-6"/></>,
   };
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -647,9 +655,10 @@ const RoleNavigationLinks = ({
   mobile?: boolean;
 }) => {
   const location = useLocation();
+  const items = mobile ? navigationItemsForRole(role) : bottomNavigationItemsForRole(role);
   return (
     <>
-      {navigationItemsForRole(role).map((item) => {
+      {items.map((item) => {
         const active = isNavigationTargetActive(location.pathname, location.search, item.to);
         return (
           <Link
@@ -819,7 +828,7 @@ const MobileBottomNavigation = () => {
     user.subscriptionStatus === SubscriptionStatus.ACTIVE;
   if (!buyerReady && !producerReady) return null;
 
-  const items = navigationItemsForRole(user.role);
+  const items = bottomNavigationItemsForRole(user.role);
   return (
     <>
       <div aria-hidden="true" className="h-20 xl:hidden" />
@@ -863,6 +872,9 @@ export default function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/contact" element={<ContactPage />} />
+          <Route path="/events" element={<ProtectedRoute><EventsPage /></ProtectedRoute>} />
+          <Route path="/promotions" element={<ProtectedRoute><PromotionsPage /></ProtectedRoute>} />
+          <Route path="/producer-profile" element={<ProtectedRoute><PublicProducerProfilePage /></ProtectedRoute>} />
           <Route
             path="/account"
             element={
@@ -955,6 +967,15 @@ export default function App() {
                 requireProducerSubscription
               >
                 <ProducerDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/producer/growth"
+            element={
+              <ProtectedRoute role={UserRole.PRODUCER} requireProducerSubscription>
+                <ProducerGrowthPage />
               </ProtectedRoute>
             }
           />

@@ -42,6 +42,7 @@ async function main() {
   await resetFirestoreEmulator();
 
   const producerUid = "emulator-producer";
+  const partnerProducerUid = "emulator-partner-producer";
   const buyerUid = "emulator-buyer";
   const testOrderId = "test-order-direct-001";
   const scheduledAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
@@ -68,6 +69,11 @@ async function main() {
       uid: producerUid,
       email: "producer-test@mainefarmmarket.local",
       displayName: "Test Pine Farm",
+    }),
+    upsertAuthUser({
+      uid: partnerProducerUid,
+      email: "partner-test@mainefarmmarket.local",
+      displayName: "Test River Farm",
     }),
     upsertAuthUser({
       uid: buyerUid,
@@ -113,6 +119,15 @@ async function main() {
     userAgreementAcceptedAt: now,
     updatedAt: now,
   });
+  batch.set(db.collection("users").doc(partnerProducerUid), {
+    role: "producer",
+    displayName: "Test River Farm",
+    email: "partner-test@mainefarmmarket.local",
+    producerTerms: { accepted: true, version: "2026-07-25", acceptedAt: now },
+    producerOnboarding: { completed: true, completedAt: now, paymentPreference: "direct" },
+    subscription: { provider: "emulator", status: "active", testData: true },
+    updatedAt: now,
+  });
   batch.set(db.collection("farms").doc(producerUid), {
     producerUid,
     farmName: "Test Pine Farm",
@@ -121,6 +136,11 @@ async function main() {
     state: "ME",
     zip: "04901",
     description: "Emulator-only farm used for Maine Farm Market testing.",
+    promoPageEnabled: true,
+    promoHeadline: "Test Pine seasonal specials",
+    promoDescription: "Emulator-only promotion content.",
+    photos: [],
+    archivedPhotos: [],
     paymentPreference: "direct",
     acceptsStripePayments: false,
     pickupAvailable: true,
@@ -128,6 +148,21 @@ async function main() {
     deliveryNotes: "Test delivery only. No real order will be fulfilled.",
     lat: 44.552,
     lng: -69.632,
+    testData: true,
+    updatedAt: now,
+  });
+  batch.set(db.collection("farms").doc(partnerProducerUid), {
+    producerUid: partnerProducerUid,
+    farmName: "Test River Farm",
+    phone: "207-555-0102",
+    city: "Augusta",
+    state: "ME",
+    zip: "04330",
+    description: "Emulator-only partner producer.",
+    pickupAvailable: true,
+    deliveryAvailable: true,
+    lat: 44.31,
+    lng: -69.78,
     testData: true,
     updatedAt: now,
   });
@@ -139,8 +174,12 @@ async function main() {
     category: "Fruit",
     tags: ["test", "blueberries"],
     unit: "pint",
-    price: 5,
-    priceCents: 500,
+    price: 4,
+    priceCents: 400,
+    originalPrice: 5,
+    originalPriceCents: 500,
+    discountLabel: "TEST HARVEST DEAL",
+    discountEndsAt: Timestamp.fromMillis(Date.now() + 7 * 86_400_000),
     quantityAvailable: 12,
     inStock: true,
     archived: false,
@@ -151,6 +190,67 @@ async function main() {
     producerTown: "Waterville, ME",
     producerPhone: "207-555-0100",
     imageUrl: "",
+    testData: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const eventStart = Timestamp.fromMillis(Date.now() + 2 * 86_400_000);
+  const eventEnd = Timestamp.fromMillis(Date.now() + 2 * 86_400_000 + 3 * 60 * 60 * 1000);
+  batch.set(db.collection("events").doc("test-harvest-event"), {
+    hostProducerId: producerUid,
+    title: "TEST EVENT — Harvest Market",
+    description: "Emulator-only event for calendar and producer attendance testing.",
+    venueName: "Test Town Green",
+    address: "1 Test Square",
+    city: "Waterville",
+    state: "ME",
+    zip: "04901",
+    lat: 44.552,
+    lng: -69.632,
+    categories: ["Produce", "Honey"],
+    startAt: eventStart,
+    endAt: eventEnd,
+    status: "published",
+    testData: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  batch.set(db.collection("events").doc("test-harvest-event").collection("attendees").doc(producerUid), {
+    producerId: producerUid,
+    farmName: "Test Pine Farm",
+    joinedAt: now,
+  });
+  batch.set(db.collection("events").doc("test-harvest-event").collection("attendees").doc(partnerProducerUid), {
+    producerId: partnerProducerUid,
+    farmName: "Test River Farm",
+    joinedAt: now,
+  });
+  batch.set(db.collection("promotions").doc("test-weekend-deal"), {
+    producerId: producerUid,
+    title: "TEST DEAL — Weekend farm box",
+    description: "Emulator-only custom promotion.",
+    kind: "deal",
+    startsAt: Timestamp.fromMillis(Date.now() - 60_000),
+    endsAt: Timestamp.fromMillis(Date.now() + 7 * 86_400_000),
+    active: true,
+    testData: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  batch.set(db.collection("producerRecommendations").doc(`${producerUid}__${partnerProducerUid}`), {
+    producerId: producerUid,
+    recommendedProducerId: partnerProducerUid,
+    note: "A trusted emulator test neighbor.",
+    testData: true,
+    createdAt: now,
+  });
+  batch.set(db.collection("producerPartnerships").doc(`${partnerProducerUid}__${producerUid}`), {
+    memberIds: [partnerProducerUid, producerUid].sort(),
+    requestedBy: producerUid,
+    status: "accepted",
+    pickupEnabled: true,
+    deliveryEnabled: true,
+    publicNote: "Emulator-only shared pickup and delivery support.",
     testData: true,
     createdAt: now,
     updatedAt: now,

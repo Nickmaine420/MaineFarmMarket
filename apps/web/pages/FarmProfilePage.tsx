@@ -1,8 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../App";
-import { db } from "../firebase";
+import { db, storage } from "../firebase";
 import { deleteField, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { hasUsPhoneNumber, isMaineZip } from "../utils/validation";
+import { MAX_PRODUCER_PROFILE_PHOTOS } from "@mfm/shared";
+
+type ProfilePhoto = { url: string; alt: string; uploadedAt?: string };
 
 type FarmDoc = {
   producerUid: string;
@@ -15,6 +19,9 @@ type FarmDoc = {
   pickupAvailable: boolean;
   deliveryAvailable: boolean;
   deliveryNotes: string;
+  description?: string;
+  photos?: ProfilePhoto[];
+  archivedPhotos?: ProfilePhoto[];
   lat: number | null;
   lng: number | null;
   updatedAt?: any;
@@ -36,6 +43,12 @@ export default function FarmProfilePage() {
   const [pickupAvailable, setPickupAvailable] = useState(true);
   const [deliveryAvailable, setDeliveryAvailable] = useState(false);
   const [deliveryNotes, setDeliveryNotes] = useState("");
+  const [description, setDescription] = useState("");
+  const [photos, setPhotos] = useState<ProfilePhoto[]>([]);
+  const [archivedPhotos, setArchivedPhotos] = useState<ProfilePhoto[]>([]);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoAlt, setPhotoAlt] = useState("");
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
   const [notice, setNotice] = useState<
@@ -71,6 +84,9 @@ export default function FarmProfilePage() {
           setPickupAvailable(d.pickupAvailable ?? true);
           setDeliveryAvailable(d.deliveryAvailable ?? false);
           setDeliveryNotes(d.deliveryNotes || "");
+          setDescription(d.description || "");
+          setPhotos(Array.isArray(d.photos) ? d.photos.slice(0, MAX_PRODUCER_PROFILE_PHOTOS) : []);
+          setArchivedPhotos(Array.isArray(d.archivedPhotos) ? d.archivedPhotos : []);
           setLat(
             typeof privateProfile.exactLocation?.lat === "number"
               ? privateProfile.exactLocation.lat
@@ -164,6 +180,9 @@ export default function FarmProfilePage() {
         pickupAvailable,
         deliveryAvailable,
         deliveryNotes: deliveryNotes.trim(),
+        description: description.trim(),
+        photos,
+        archivedPhotos,
         lat: publicLat,
         lng: publicLng,
         updatedAt: serverTimestamp(),
@@ -186,6 +205,67 @@ export default function FarmProfilePage() {
       setNotice({ tone: "error", message: "Could not save the farm profile. Please try again." });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const uploadProfilePhoto = async () => {
+    if (!user || !photoFile) return;
+    if (photos.length >= MAX_PRODUCER_PROFILE_PHOTOS) {
+      setNotice({ tone: "error", message: `A public profile can show up to ${MAX_PRODUCER_PROFILE_PHOTOS} photos.` });
+      return;
+    }
+    const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
+    if (!allowedTypes.has(photoFile.type) || photoFile.size > 8 * 1024 * 1024) {
+      setNotice({ tone: "error", message: "Use a JPEG, PNG, WebP, HEIC, or HEIF image that is 8 MB or smaller." });
+      return;
+    }
+    try {
+      setUploadingPhoto(true);
+      const safeName = photoFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const photoRef = ref(storage, `producerProfiles/${user.uid}/${Date.now()}_${safeName}`);
+      await uploadBytes(photoRef, photoFile);
+      const url = await getDownloadURL(photoRef);
+      const nextPhotos = [...photos, { url, alt: photoAlt.trim() || `${farmName} profile photo`, uploadedAt: new Date().toISOString() }];
+      await setDoc(doc(db, "farms", user.uid), { photos: nextPhotos, archivedPhotos, updatedAt: serverTimestamp() }, { merge: true });
+      setPhotos(nextPhotos);
+      setPhotoFile(null);
+      setPhotoAlt("");
+      setNotice({ tone: "success", message: "Profile photo uploaded." });
+    } catch (error) {
+      console.error(error);
+      setNotice({ tone: "error", message: "The profile photo could not be uploaded." });
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const hideProfilePhoto = async (photo: ProfilePhoto) => {
+    if (!user) return;
+    const nextPhotos = photos.filter((candidate) => candidate.url !== photo.url);
+    const nextArchived = [...archivedPhotos.filter((candidate) => candidate.url !== photo.url), photo].slice(-24);
+    try {
+      await setDoc(doc(db, "farms", user.uid), { photos: nextPhotos, archivedPhotos: nextArchived, updatedAt: serverTimestamp() }, { merge: true });
+      setPhotos(nextPhotos);
+      setArchivedPhotos(nextArchived);
+      setNotice({ tone: "info", message: "Photo hidden from the public profile and preserved in the archive." });
+    } catch (error) {
+      console.error(error);
+      setNotice({ tone: "error", message: "The photo could not be hidden." });
+    }
+  };
+
+  const restoreProfilePhoto = async (photo: ProfilePhoto) => {
+    if (!user || photos.length >= MAX_PRODUCER_PROFILE_PHOTOS) return;
+    const nextPhotos = [...photos, photo];
+    const nextArchived = archivedPhotos.filter((candidate) => candidate.url !== photo.url);
+    try {
+      await setDoc(doc(db, "farms", user.uid), { photos: nextPhotos, archivedPhotos: nextArchived, updatedAt: serverTimestamp() }, { merge: true });
+      setPhotos(nextPhotos);
+      setArchivedPhotos(nextArchived);
+      setNotice({ tone: "success", message: "Photo restored to the public profile." });
+    } catch (error) {
+      console.error(error);
+      setNotice({ tone: "error", message: "The photo could not be restored." });
     }
   };
 
@@ -253,7 +333,20 @@ export default function FarmProfilePage() {
               <label className="block text-sm font-semibold mb-1">Hours (pickup / call hours)</label>
               <textarea className="border p-2 w-full rounded" value={hours} onChange={e=>setHours(e.target.value)} placeholder="Mon–Fri 9am–5pm, Sat 10am–2pm" />
             </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-semibold mb-1">Public producer story</label>
+              <textarea maxLength={2000} className="min-h-32 border p-3 w-full rounded" value={description} onChange={e=>setDescription(e.target.value)} placeholder="Tell buyers about your farm, homestead, products, and practices." />
+              <div className="mt-1 text-xs text-stone-500">{description.length}/2,000 characters</div>
+            </div>
           </div>
+
+          <section className="mt-6 rounded-2xl border p-5">
+            <h4 className="text-xl font-bold">Public profile photos</h4>
+            <p className="mt-1 text-sm text-stone-600">Add up to {MAX_PRODUCER_PROFILE_PHOTOS} photos. Hidden photos are archived rather than deleted.</p>
+            {photos.length > 0 && <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3">{photos.map((photo, index) => <div key={photo.url} className="overflow-hidden rounded-xl border bg-white"><img src={photo.url} alt={photo.alt || `Profile photo ${index + 1}`} className="h-36 w-full object-cover" /><div className="p-2"><div className="truncate text-xs text-stone-600">{photo.alt}</div><button type="button" onClick={() => hideProfilePhoto(photo)} className="mt-2 text-xs font-bold text-amber-800 underline">Hide and archive</button></div></div>)}</div>}
+            {photos.length < MAX_PRODUCER_PROFILE_PHOTOS && <div className="mt-4 grid gap-3 rounded-xl bg-stone-50 p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end"><label className="text-sm font-bold">Photo<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => setPhotoFile(event.target.files?.[0] || null)} className="mt-1 block w-full text-sm font-normal" /></label><label className="text-sm font-bold">Photo description<input value={photoAlt} maxLength={160} onChange={(event) => setPhotoAlt(event.target.value)} className="mt-1 w-full rounded-lg border p-2 font-normal" placeholder="Farm stand in summer" /></label><button type="button" disabled={!photoFile || uploadingPhoto} onClick={uploadProfilePhoto} className="rounded-xl bg-emerald-900 px-4 py-2 font-bold text-white disabled:opacity-50">{uploadingPhoto ? "Uploading…" : "Add photo"}</button></div>}
+            {archivedPhotos.length > 0 && <details className="mt-4"><summary className="cursor-pointer text-sm font-bold">Archived photos ({archivedPhotos.length})</summary><div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">{archivedPhotos.map((photo) => <div key={photo.url} className="rounded-xl border p-2"><img src={photo.url} alt={photo.alt} className="h-24 w-full rounded-lg object-cover opacity-70" /><button type="button" disabled={photos.length >= MAX_PRODUCER_PROFILE_PHOTOS} onClick={() => restoreProfilePhoto(photo)} className="mt-2 text-xs font-bold text-emerald-800 underline disabled:opacity-40">Restore</button></div>)}</div></details>}
+          </section>
 
           <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="border rounded-xl p-4">

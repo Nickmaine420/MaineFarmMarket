@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "../router";
+import { Link, useNavigate } from "../router";
 import { auth, db } from "../firebase";
 import {
   addDoc,
@@ -12,6 +12,7 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { activeProductDiscount, effectiveProductPriceCents } from "../utils/marketplaceFeatures";
 
 type AnyDoc = Record<string, any>;
 
@@ -48,18 +49,13 @@ const CART_KEY = "mfm_cart";
 const LEGACY_CART_KEY = "mfm_cart_items";
 const BUYER_LOC_KEY = "mfm_buyer_location";
 
-function dollarsToCents(price: any) {
-  const n = Number(price || 0);
-  return Math.round(n * 100);
-}
-
 function buildCartItemFromProduct(product: AnyDoc): CartItem {
   return {
     productId: String(product.id),
     name: String(product.name || product.title || "Item"),
     unit: String(product.unit || "each"),
     qty: 1,
-    priceCents: dollarsToCents(product.price),
+    priceCents: effectiveProductPriceCents(product),
     producerId: product.producerId ? String(product.producerId) : "",
     producerName: product.producerName ? String(product.producerName) : "",
     imageUrl: product.photoUrl || product.imageUrl || product.image || "",
@@ -668,9 +664,9 @@ export default function BuyerDashboard() {
               )}
 
               <div className="p-4">
-                <div className="text-xs text-stone-500 font-semibold">
+                {(product.producerUid || product.producerId) ? <Link to={`/producer-profile?producerId=${encodeURIComponent(String(product.producerUid || product.producerId))}`} className="text-sm font-bold text-emerald-800 underline decoration-emerald-300 underline-offset-2">
                   {farm?.farmName || farm?.name || product.producerName || "Maine Farm"}
-                </div>
+                </Link> : <div className="text-xs text-stone-500 font-semibold">{farm?.farmName || farm?.name || product.producerName || "Maine Farm"}</div>}
                 <div className="text-xs text-stone-400 space-y-0.5">
                   {(farm?.city || farm?.state || product.producerTown) && (
                     <div>
@@ -696,6 +692,8 @@ export default function BuyerDashboard() {
                   )}
                 </div>
 
+                {activeProductDiscount(product) && <div className="mt-3 inline-flex rounded-full bg-red-100 px-3 py-1 text-xs font-black text-red-800">{product.discountLabel || `${activeProductDiscount(product)?.percent}% OFF`}</div>}
+
                 <div className="mt-2 text-xl font-extrabold text-stone-900">
                   {product.name || product.title}
                 </div>
@@ -705,7 +703,8 @@ export default function BuyerDashboard() {
                 ) : null}
 
                 <div className="mt-2 text-sm text-gray-600">
-                  ${Number(product.price || 0).toFixed(2)} / {product.unit || "each"}
+                  <span className={activeProductDiscount(product) ? "font-black text-red-700" : ""}>${(effectiveProductPriceCents(product) / 100).toFixed(2)}</span>
+                  {activeProductDiscount(product) && <span className="ml-2 text-stone-400 line-through">${((activeProductDiscount(product)?.originalPriceCents || 0) / 100).toFixed(2)}</span>} / {product.unit || "each"}
                 </div>
 
                 <div className="mt-3 flex gap-2 flex-wrap">

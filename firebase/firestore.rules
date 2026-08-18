@@ -15,6 +15,32 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
+    function activeProducer(userId) {
+      let profile = get(/databases/$(database)/documents/users/$(userId)).data;
+      return signedIn()
+        && request.auth.uid == userId
+        && profile.role == "producer"
+        && profile.producerTerms.accepted == true
+        && profile.producerTerms.version == "2026-07-25"
+        && profile.producerOnboarding.completed == true
+        && profile.subscription.status in ["active", "trialing", "paid"];
+    }
+
+    function validOptionalDiscount(data) {
+      return !data.keys().hasAny(["originalPriceCents"])
+        || (
+          data.originalPriceCents is int
+          && data.originalPriceCents > data.priceCents
+          && data.originalPrice is number
+          && data.originalPrice * 100 >= data.originalPriceCents - 0.001
+          && data.originalPrice * 100 <= data.originalPriceCents + 0.001
+          && (!data.keys().hasAny(["discountLabel"])
+            || (data.discountLabel is string && data.discountLabel.size() <= 80))
+          && (!data.keys().hasAny(["discountEndsAt"])
+            || data.discountEndsAt is timestamp)
+        );
+    }
+
     function validProduct(data) {
       return data.title is string
         && data.title.size() > 0
@@ -30,7 +56,8 @@ service cloud.firestore {
         && data.inStock is bool
         && data.producerUid == request.auth.uid
         && data.producerId == request.auth.uid
-        && data.ownerId == request.auth.uid;
+        && data.ownerId == request.auth.uid
+        && validOptionalDiscount(data);
     }
 
     function acceptedCurrentProducerTerms() {
@@ -153,7 +180,185 @@ service cloud.firestore {
         && request.resource.data.phone.size() <= 30
         && request.resource.data.pickupAvailable is bool
         && request.resource.data.deliveryAvailable is bool
+        && (!request.resource.data.keys().hasAny(["description"])
+          || (request.resource.data.description is string
+            && request.resource.data.description.size() <= 2000))
+        && (!request.resource.data.keys().hasAny(["photos"])
+          || (request.resource.data.photos is list
+            && request.resource.data.photos.size() <= 6))
+        && (!request.resource.data.keys().hasAny(["archivedPhotos"])
+          || (request.resource.data.archivedPhotos is list
+            && request.resource.data.archivedPhotos.size() <= 24))
+        && (!request.resource.data.keys().hasAny(["promoPageEnabled"])
+          || request.resource.data.promoPageEnabled is bool)
+        && (!request.resource.data.keys().hasAny(["promoHeadline"])
+          || (request.resource.data.promoHeadline is string
+            && request.resource.data.promoHeadline.size() <= 160))
+        && (!request.resource.data.keys().hasAny(["promoDescription"])
+          || (request.resource.data.promoDescription is string
+            && request.resource.data.promoDescription.size() <= 1000))
         && !request.resource.data.keys().hasAny(["addressLine1"]);
+      allow delete: if false;
+    }
+
+    // Producers publish events; each producer controls only their own attendance
+    // record so an organizer cannot falsely claim another farm is attending.
+    match /events/{eventId} {
+      function validEvent(data) {
+        return data.hostProducerId == request.auth.uid
+          && data.title is string
+          && data.title.size() > 0
+          && data.title.size() <= 160
+          && data.description is string
+          && data.description.size() <= 3000
+          && data.venueName is string
+          && data.venueName.size() > 0
+          && data.venueName.size() <= 160
+          && data.address is string
+          && data.address.size() <= 240
+          && data.city is string
+          && data.city.size() > 0
+          && data.city.size() <= 120
+          && data.state == "ME"
+          && data.zip is string
+          && data.zip.size() >= 5
+          && data.zip.size() <= 10
+          && data.categories is list
+          && data.categories.size() <= 12
+          && data.startAt is timestamp
+          && data.endAt is timestamp
+          && data.endAt > data.startAt
+          && data.status in ["draft", "published", "cancelled"]
+          && (!data.keys().hasAny(["lat"])
+            || data.lat == null
+            || (data.lat is number && data.lat >= -90 && data.lat <= 90))
+          && (!data.keys().hasAny(["lng"])
+            || data.lng == null
+            || (data.lng is number && data.lng >= -180 && data.lng <= 180));
+      }
+
+      allow read: if signedIn()
+        && (resource.data.status == "published" || resource.data.hostProducerId == request.auth.uid);
+      allow create: if activeProducer(request.auth.uid) && validEvent(request.resource.data);
+      allow update: if activeProducer(request.auth.uid)
+        && resource.data.hostProducerId == request.auth.uid
+        && request.resource.data.hostProducerId == resource.data.hostProducerId
+        && validEvent(request.resource.data);
+      allow delete: if false;
+
+      match /attendees/{producerId} {
+        allow read: if signedIn();
+        allow create, update: if activeProducer(producerId)
+          && request.auth.uid == producerId
+          && request.resource.data.producerId == producerId
+          && request.resource.data.farmName is string
+          && request.resource.data.farmName.size() > 0
+          && request.resource.data.farmName.size() <= 120
+          && get(/databases/$(database)/documents/events/$(eventId)).data.status == "published";
+        allow delete: if signedIn() && request.auth.uid == producerId;
+      }
+    }
+
+    // Firestore collection-group event attendance queries require a recursive
+    // wildcard match. `attendees` is reserved exclusively for public event
+    // attendance; writes remain protected by the event-specific rule above.
+    match /{eventPath=**}/attendees/{producerId} {
+      allow read: if signedIn();
+    }
+
+    // Custom producer deals displayed on the shared Promotions page.
+    match /promotions/{promotionId} {
+      function validPromotion(data) {
+        return data.producerId == request.auth.uid
+          && data.title is string
+          && data.title.size() > 0
+          && data.title.size() <= 160
+          && data.description is string
+          && data.description.size() > 0
+          && data.description.size() <= 2000
+          && data.kind in ["deal", "announcement"]
+          && data.startsAt is timestamp
+          && data.endsAt is timestamp
+          && data.endsAt > data.startsAt
+          && data.active is bool;
+      }
+
+      allow read: if signedIn()
+        && (resource.data.active == true || resource.data.producerId == request.auth.uid);
+      allow create: if activeProducer(request.auth.uid)
+        && validPromotion(request.resource.data);
+      allow update: if activeProducer(request.auth.uid)
+        && resource.data.producerId == request.auth.uid
+        && request.resource.data.producerId == resource.data.producerId
+        && validPromotion(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Recommendations are public endorsements. The recommending producer owns
+    // the record and cannot recommend their own account.
+    match /producerRecommendations/{recommendationId} {
+      allow read: if signedIn();
+      allow create: if activeProducer(request.auth.uid)
+        && request.resource.data.producerId == request.auth.uid
+        && request.resource.data.recommendedProducerId is string
+        && request.resource.data.recommendedProducerId != request.auth.uid
+        && request.resource.data.note is string
+        && request.resource.data.note.size() <= 500
+        && exists(/databases/$(database)/documents/farms/$(request.resource.data.recommendedProducerId));
+      allow update: if activeProducer(request.auth.uid)
+        && resource.data.producerId == request.auth.uid
+        && request.resource.data.producerId == resource.data.producerId
+        && request.resource.data.recommendedProducerId == resource.data.recommendedProducerId
+        && request.resource.data.note is string
+        && request.resource.data.note.size() <= 500;
+      allow delete: if signedIn()
+        && request.auth.uid == resource.data.producerId;
+    }
+
+    // Partnerships require a request and acceptance by the other producer.
+    // Member identities are immutable after creation.
+    match /producerPartnerships/{partnershipId} {
+      function validPartnership(data) {
+        return data.memberIds is list
+          && data.memberIds.size() == 2
+          && data.memberIds[0] is string
+          && data.memberIds[1] is string
+          && data.memberIds[0] != data.memberIds[1]
+          && data.requestedBy is string
+          && data.memberIds.hasAny([data.requestedBy])
+          && data.status in ["pending", "accepted", "declined", "cancelled"]
+          && data.pickupEnabled is bool
+          && data.deliveryEnabled is bool
+          && data.publicNote is string
+          && data.publicNote.size() <= 500
+          && exists(/databases/$(database)/documents/farms/$(data.memberIds[0]))
+          && exists(/databases/$(database)/documents/farms/$(data.memberIds[1]));
+      }
+
+      allow read: if signedIn()
+        && (
+          resource.data.status == "accepted"
+          || resource.data.memberIds.hasAny([request.auth.uid])
+        );
+      allow create: if activeProducer(request.auth.uid)
+        && validPartnership(request.resource.data)
+        && request.resource.data.requestedBy == request.auth.uid
+        && request.resource.data.memberIds.hasAny([request.auth.uid])
+        && request.resource.data.status == "pending";
+      allow update: if activeProducer(request.auth.uid)
+        && resource.data.memberIds.hasAny([request.auth.uid])
+        && request.resource.data.memberIds == resource.data.memberIds
+        && request.resource.data.requestedBy == resource.data.requestedBy
+        && validPartnership(request.resource.data)
+        && (
+          (resource.data.status == "pending"
+            && request.auth.uid != resource.data.requestedBy
+            && request.resource.data.status in ["accepted", "declined"])
+          || (resource.data.status in ["pending", "accepted"]
+            && request.resource.data.status == "cancelled")
+          || (resource.data.status == "accepted"
+            && request.resource.data.status == "accepted")
+        );
       allow delete: if false;
     }
 

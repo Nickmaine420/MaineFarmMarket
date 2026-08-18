@@ -8,6 +8,24 @@ const DIRECT_ORDER_MAX_HOLD_MS = 24 * 60 * 60 * 1000;
 const DIRECT_ORDER_MIN_HOLD_MS = 30 * 60 * 1000;
 const DIRECT_ORDER_SCHEDULE_BUFFER_MS = 30 * 60 * 1000;
 
+function effectiveProductPriceCents(product, nowMs = Date.now()) {
+  const storedPriceCents = Number.isInteger(product?.priceCents)
+    ? Number(product.priceCents)
+    : Math.round(Number(product?.price || 0) * 100);
+  const originalPriceCents = Number(product?.originalPriceCents || 0);
+  const discountEndsAtMs =
+    product?.discountEndsAt?.toMillis?.() ||
+    (typeof product?.discountEndsAt?.seconds === "number"
+      ? product.discountEndsAt.seconds * 1000
+      : null);
+  return discountEndsAtMs != null &&
+    discountEndsAtMs <= nowMs &&
+    Number.isInteger(originalPriceCents) &&
+    originalPriceCents > storedPriceCents
+    ? originalPriceCents
+    : storedPriceCents;
+}
+
 function buildGooglePlayProducerMonthlyBasePlan(price) {
   const currencyCode = String(price?.currencyCode || "").trim().toUpperCase();
   const units = String(price?.units ?? "").trim();
@@ -227,6 +245,7 @@ module.exports = {
   directOrderInventoryState,
   directOrderReservationExpiry,
   deriveBuyerOrderStatus,
+  effectiveProductPriceCents,
   normalizeRequestedItems,
   pendingDirectProducerIds,
   validateScheduledAt,

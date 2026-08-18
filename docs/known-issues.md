@@ -35,3 +35,10 @@ Recorded during project organization on 2026-07-25:
   header navigation, a persistent phone/tablet bottom navigation bar, URL-backed
   Producer workspace tabs, and responsive navigation breakpoints. Buyer and Producer
   navigation paths are covered by mobile end-to-end tests.
+- Version 2.0 (version code 11) is the pre-upload marketplace discovery release. It
+  adds producer promotion pages, an event calendar and attendance directory, public
+  producer profiles and archived photos, product discount marketing, producer
+  recommendations, and mutual pickup/delivery partnerships. Trusted checkout validates
+  partner pickup selections and snapshots the pickup contact details into each order.
+  The release gate covers these flows on desktop and mobile, including live attendance
+  queries and Firestore/Storage authorization.

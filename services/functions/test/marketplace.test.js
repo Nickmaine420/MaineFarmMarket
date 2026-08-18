@@ -10,10 +10,37 @@ const {
   directOrderInventoryState,
   directOrderReservationExpiry,
   deriveBuyerOrderStatus,
+  effectiveProductPriceCents,
   normalizeRequestedItems,
   pendingDirectProducerIds,
   validateScheduledAt,
 } = require("../marketplace");
+
+test("expired product discounts revert to the trusted regular price", () => {
+  const now = Date.parse("2026-08-18T12:00:00.000Z");
+  assert.equal(
+    effectiveProductPriceCents(
+      {
+        priceCents: 750,
+        originalPriceCents: 1000,
+        discountEndsAt: { seconds: (now - 1000) / 1000 },
+      },
+      now
+    ),
+    1000
+  );
+  assert.equal(
+    effectiveProductPriceCents(
+      {
+        priceCents: 750,
+        originalPriceCents: 1000,
+        discountEndsAt: { seconds: (now + 1000) / 1000 },
+      },
+      now
+    ),
+    750
+  );
+});
 
 test("Google Play producer plan is monthly, US-only, and $29.99 compatible", () => {
   const plan = buildGooglePlayProducerMonthlyBasePlan({

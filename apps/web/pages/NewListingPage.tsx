@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../App";
 import { auth, db, storage } from "../firebase";
-import { collection, addDoc, doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, doc, getDoc, setDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { toPriceCents, toWholeQuantity } from "../utils/validation";
+import { salePriceFromPercent } from "../utils/marketplaceFeatures";
 
 const PRODUCER_PROFILE_PATH = "users"; // canonical: users/{uid}
 
@@ -80,6 +81,9 @@ export default function NewListingPage({ onBack }: { onBack: () => void }) {
 
   const [unit, setUnit] = useState("each");
   const [price, setPrice] = useState(""); // string input
+  const [discountPercent, setDiscountPercent] = useState("");
+  const [discountLabel, setDiscountLabel] = useState("");
+  const [discountEndsAt, setDiscountEndsAt] = useState("");
   const [quantityAvailable, setQuantityAvailable] = useState("");
 
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -91,6 +95,7 @@ export default function NewListingPage({ onBack }: { onBack: () => void }) {
     () => (imageFile ? URL.createObjectURL(imageFile) : ""),
     [imageFile]
   );
+  const previewRegularPriceCents = toPriceCents(price);
 
   useEffect(
     () => () => {
@@ -115,7 +120,7 @@ export default function NewListingPage({ onBack }: { onBack: () => void }) {
       return;
     }
 
-    const priceCents = toPriceCents(price);
+    const regularPriceCents = toPriceCents(price);
     const qtyNum = toWholeQuantity(quantityAvailable);
 
     if (!title.trim()) {
@@ -126,8 +131,25 @@ export default function NewListingPage({ onBack }: { onBack: () => void }) {
       setNotice({ tone: "error", message: "Product name must be 120 characters or less." });
       return;
     }
-    if (priceCents == null) {
+    if (regularPriceCents == null) {
       setNotice({ tone: "error", message: "Enter a price greater than $0." });
+      return;
+    }
+    const requestedDiscount = discountPercent.trim() === "" ? 0 : Number(discountPercent);
+    if (!Number.isInteger(requestedDiscount) || requestedDiscount < 0 || requestedDiscount > 90) {
+      setNotice({ tone: "error", message: "Discount must be a whole percentage from 1 to 90, or left blank." });
+      return;
+    }
+    const discountedPriceCents = requestedDiscount > 0
+      ? salePriceFromPercent(regularPriceCents, requestedDiscount)
+      : regularPriceCents;
+    if (discountedPriceCents == null) {
+      setNotice({ tone: "error", message: "The discount could not be calculated." });
+      return;
+    }
+    const discountEndDate = discountEndsAt ? new Date(discountEndsAt) : null;
+    if (discountEndDate && (!Number.isFinite(discountEndDate.getTime()) || discountEndDate.getTime() <= Date.now())) {
+      setNotice({ tone: "error", message: "Choose a discount end time in the future." });
       return;
     }
     if (qtyNum == null) {
@@ -152,6 +174,7 @@ export default function NewListingPage({ onBack }: { onBack: () => void }) {
       }
     }
 
+    const priceCents = discountedPriceCents;
     const priceNum = priceCents / 100;
 
     setSubmitting(true);
@@ -238,6 +261,14 @@ export default function NewListingPage({ onBack }: { onBack: () => void }) {
         unit: formData.unit,
         price: priceNum,
         priceCents,
+        ...(requestedDiscount > 0
+          ? {
+              originalPrice: regularPriceCents / 100,
+              originalPriceCents: regularPriceCents,
+              discountLabel: discountLabel.trim(),
+              ...(discountEndDate ? { discountEndsAt: Timestamp.fromDate(discountEndDate) } : {}),
+            }
+          : {}),
         quantityAvailable: qtyNum,
         inStock: qtyNum > 0,
         producerUid: uid,
@@ -410,7 +441,7 @@ export default function NewListingPage({ onBack }: { onBack: () => void }) {
 
         <div>
           {/* ✅ Price placeholder clarity */}
-          <label className="block text-sm font-semibold mb-1">Price ($)</label>
+          <label className="block text-sm font-semibold mb-1">Regular price ($)</label>
           <input
             placeholder="$00.00"
             type="number"
@@ -423,6 +454,23 @@ export default function NewListingPage({ onBack }: { onBack: () => void }) {
             inputMode="decimal"
           />
         </div>
+      </div>
+
+      <div className="mb-4 rounded-xl border border-orange-200 bg-orange-50 p-4">
+        <h3 className="font-bold text-orange-950">Optional product discount</h3>
+        <p className="mt-1 text-sm text-orange-900">The regular price will be crossed out and the savings badge is calculated automatically.</p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="text-sm font-semibold">Discount percent
+            <input type="number" min="1" max="90" step="1" value={discountPercent} onChange={(event) => setDiscountPercent(event.target.value)} className="mt-1 w-full rounded-lg border p-2 font-normal" placeholder="20" />
+          </label>
+          <label className="text-sm font-semibold">Marketing label
+            <input maxLength={80} value={discountLabel} onChange={(event) => setDiscountLabel(event.target.value)} className="mt-1 w-full rounded-lg border p-2 font-normal" placeholder="Harvest special" />
+          </label>
+          <label className="text-sm font-semibold sm:col-span-2">Discount ends (optional)
+            <input type="datetime-local" value={discountEndsAt} onChange={(event) => setDiscountEndsAt(event.target.value)} className="mt-1 w-full rounded-lg border p-2 font-normal" />
+          </label>
+        </div>
+        {previewRegularPriceCents != null && Number(discountPercent) > 0 && salePriceFromPercent(previewRegularPriceCents, Number(discountPercent)) != null && <div className="mt-3 text-sm font-bold text-orange-950">Buyer price: ${((salePriceFromPercent(previewRegularPriceCents, Number(discountPercent)) || 0) / 100).toFixed(2)}</div>}
       </div>
 
       <label className="block text-sm font-semibold mb-1">Quantity available</label>

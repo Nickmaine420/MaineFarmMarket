@@ -19,6 +19,7 @@ const {
   directOrderInventoryState,
   directOrderReservationExpiry,
   deriveBuyerOrderStatus,
+  effectiveProductPriceCents,
   normalizeRequestedItems,
   pendingDirectProducerIds,
   validateScheduledAt,
@@ -723,8 +724,9 @@ async function resolveProductsAndPricing(itemsInput) {
     }
     const p = snap.data() || {};
     const qty = item.qty;
-    const price = Number(p.price || 0);
-    const priceCents = Math.round(price * 100);
+    // Expired discounts revert to the regular price on the trusted server even
+    // if a client has an older product snapshot in its cart.
+    const priceCents = effectiveProductPriceCents(p);
     const quantityAvailable = Number(p.quantityAvailable);
     const producerId = (p.producerId || p.producerUid)
       ? String(p.producerId || p.producerUid)
@@ -861,6 +863,10 @@ function buildPerProducerSnapshot(producerIds, perProducerInput) {
       selection.fulfillmentMethod === "delivery" ? "delivery" : "pickup";
     perProducer[producerId] = {
       fulfillmentMethod,
+      pickupPartnerId:
+        fulfillmentMethod === "pickup"
+          ? String(selection.pickupPartnerId || "").trim().slice(0, 128)
+          : "",
       window: {
         id: String(selection.selectedWindowId || "default"),
         days: [],
@@ -880,16 +886,48 @@ async function validateProducerFulfillment(producerIds, perProducer, scheduledAt
   const farmSnapshots = await db.getAll(...farmRefs);
   let canonicalScheduledAt = null;
 
-  ids.forEach((producerId, index) => {
+  for (let index = 0; index < ids.length; index += 1) {
+    const producerId = ids[index];
     const farm = farmSnapshots[index].exists ? farmSnapshots[index].data() || {} : {};
     const method = perProducer[producerId]?.fulfillmentMethod || "pickup";
+    const pickupPartnerId = String(perProducer[producerId]?.pickupPartnerId || "");
     if (method === "delivery" && farm.deliveryAvailable !== true) {
       throw new HttpsError(
         "failed-precondition",
         `${String(farm.farmName || "A producer")} does not offer delivery.`
       );
     }
-    if (method === "pickup" && farm.pickupAvailable === false) {
+    let pickupPartner = null;
+    if (method === "pickup" && pickupPartnerId) {
+      if (pickupPartnerId === producerId) {
+        throw new HttpsError("invalid-argument", "A producer cannot be their own pickup partner.");
+      }
+      const partnershipId = [producerId, pickupPartnerId].sort().join("__");
+      const [partnershipSnapshot, partnerFarmSnapshot] = await Promise.all([
+        db.collection("producerPartnerships").doc(partnershipId).get(),
+        db.collection("farms").doc(pickupPartnerId).get(),
+      ]);
+      const partnership = partnershipSnapshot.exists ? partnershipSnapshot.data() || {} : {};
+      const partnerFarm = partnerFarmSnapshot.exists ? partnerFarmSnapshot.data() || {} : {};
+      if (
+        partnership.status !== "accepted" ||
+        partnership.pickupEnabled !== true ||
+        !Array.isArray(partnership.memberIds) ||
+        !partnership.memberIds.includes(producerId) ||
+        !partnership.memberIds.includes(pickupPartnerId) ||
+        partnerFarm.pickupAvailable === false
+      ) {
+        throw new HttpsError("failed-precondition", "The selected partner pickup location is no longer available.");
+      }
+      pickupPartner = {
+        producerId: pickupPartnerId,
+        farmName: String(partnerFarm.farmName || "Producer partner"),
+        city: String(partnerFarm.city || ""),
+        state: String(partnerFarm.state || "ME"),
+        phone: String(partnerFarm.phone || ""),
+        hours: String(partnerFarm.hours || ""),
+      };
+    } else if (method === "pickup" && farm.pickupAvailable === false) {
       throw new HttpsError(
         "failed-precondition",
         `${String(farm.farmName || "A producer")} does not offer pickup.`
@@ -903,10 +941,11 @@ async function validateProducerFulfillment(producerIds, perProducer, scheduledAt
     perProducer[producerId] = {
       ...perProducer[producerId],
       scheduledAt: canonicalScheduledAt,
+      pickupPartner,
       fulfillmentNotes:
         method === "delivery" ? String(farm.deliveryNotes || "").slice(0, 500) : "",
     };
-  });
+  }
 
   return { perProducer, scheduledAt: canonicalScheduledAt };
 }
@@ -1066,6 +1105,7 @@ async function createDirectMarketplaceOrder({
           window: fulfillment.window || null,
           scheduledAt: scheduledAt || null,
           notes: notes || "",
+          pickupPartner: fulfillment.pickupPartner || null,
         },
         scheduledAt: scheduledAt || null,
         notes: notes || "",
@@ -2389,6 +2429,11 @@ async function deleteMatchingDocuments(query) {
   }
 }
 
+async function recursiveDeleteMatchingDocuments(query) {
+  const snapshot = await query.get();
+  await Promise.all(snapshot.docs.map((document) => db.recursiveDelete(document.ref)));
+}
+
 async function anonymizeMatchingDocuments(query) {
   while (true) {
     const snapshot = await query.limit(400).get();
@@ -2488,6 +2533,24 @@ exports.deleteMyAccount = onCall(
         deleteMatchingDocuments(
           db.collectionGroup("blocked").where("blockedUserId", "==", uid)
         ),
+        deleteMatchingDocuments(
+          db.collection("promotions").where("producerId", "==", uid)
+        ),
+        recursiveDeleteMatchingDocuments(
+          db.collection("events").where("hostProducerId", "==", uid)
+        ),
+        deleteMatchingDocuments(
+          db.collectionGroup("attendees").where("producerId", "==", uid)
+        ),
+        deleteMatchingDocuments(
+          db.collection("producerRecommendations").where("producerId", "==", uid)
+        ),
+        deleteMatchingDocuments(
+          db.collection("producerRecommendations").where("recommendedProducerId", "==", uid)
+        ),
+        deleteMatchingDocuments(
+          db.collection("producerPartnerships").where("memberIds", "array-contains", uid)
+        ),
       ]);
 
       const reportSnapshot = await db
@@ -2514,6 +2577,16 @@ exports.deleteMyAccount = onCall(
           .deleteFiles({ prefix: `products/${uid}/` })
           .catch((error) => {
             console.warn("Could not remove all listing images during account deletion", {
+              uid,
+              message: error?.message || String(error),
+            });
+          }),
+        admin
+          .storage()
+          .bucket()
+          .deleteFiles({ prefix: `producerProfiles/${uid}/` })
+          .catch((error) => {
+            console.warn("Could not remove producer profile images during account deletion", {
               uid,
               message: error?.message || String(error),
             });
@@ -3050,6 +3123,7 @@ exports.stripeWebhook = require("firebase-functions/v2/https").onRequest(
                         method: fulfillmentMethod,
                         fulfillmentMethod,
                         window: perProducerEntry.window || null,
+                        pickupPartner: perProducerEntry.pickupPartner || null,
                         ...scheduleFromOrder,
                       },
                       status: "paid",

@@ -49,6 +49,7 @@ type PerProducerEntry = {
   fulfillmentMethod?: "pickup" | "delivery";
   window?: { id?: string; label?: string; startTime?: string; endTime?: string };
   scheduledAt?: string;
+  pickupPartner?: { producerId?: string; farmName?: string; city?: string; state?: string; phone?: string; hours?: string } | null;
 };
 
 type Order = {
@@ -425,6 +426,9 @@ export default function BuyerOrdersPage() {
             const createdLabel = formatTimestamp(o.createdAt ?? o.paidAt ?? o.updatedAt);
             const scheduleDisplay = getScheduleDisplay(o);
             const fulfillmentMethod = getFulfillmentMethod(o);
+            const partnerPickups = (Object.values(o.perProducer || {}) as PerProducerEntry[])
+              .map((entry) => entry.pickupPartner)
+              .filter(Boolean) as NonNullable<PerProducerEntry["pickupPartner"]>[];
 
             return (
               <div key={o.id} className="bg-[#f4e7c8] border rounded-xl p-4">
@@ -446,6 +450,13 @@ export default function BuyerOrdersPage() {
                       ? ` • ${scheduleDisplay}`
                       : ""}
                   </div>
+                  {partnerPickups.map((partner, index) => (
+                    <div key={`${partner.producerId || partner.farmName}-${index}`} className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-emerald-950">
+                      Partner pickup: <strong>{partner.farmName || "Producer partner"}</strong>
+                      {[partner.city, partner.state].filter(Boolean).length > 0 ? ` · ${[partner.city, partner.state].filter(Boolean).join(", ")}` : ""}
+                      {partner.phone ? <a href={`tel:${partner.phone}`} className="ml-2 font-bold underline">{partner.phone}</a> : null}
+                    </div>
+                  ))}
                   {o.paymentMode === "direct" && (
                     <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
                       Payment is arranged directly with each producer. Confirm the

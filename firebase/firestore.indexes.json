@@ -27,7 +27,32 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "producerPartnerships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "memberIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "attendees",
+      "fieldPath": "producerId",
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ]
+    }
+  ]
 }
