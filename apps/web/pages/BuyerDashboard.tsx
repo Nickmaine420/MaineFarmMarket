@@ -757,8 +757,7 @@ export default function BuyerDashboard() {
         {/* Floating cart bar: fixed, does not affect layout; only the bar captures clicks */}
         {cartCount > 0 ? (
           <div
-            className="fixed left-0 right-0 bottom-0 z-[50] flex justify-center px-4 pointer-events-none"
-            style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+            className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-0 right-0 z-[45] flex justify-center px-4 pointer-events-none xl:bottom-0"
           >
             <div
               ref={cartBarRef}

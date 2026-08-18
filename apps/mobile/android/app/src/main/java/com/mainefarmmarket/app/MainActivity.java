@@ -7,6 +7,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(PlayBillingPlugin.class);
+        registerPlugin(GoogleAccountChooserPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

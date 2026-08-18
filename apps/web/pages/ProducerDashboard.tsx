@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../App';
+import { useSearchParams } from '../router';
 import NewListingPage from './NewListingPage';
 import FarmProfilePage from './FarmProfilePage';
 import { db, functions } from '../firebase';
@@ -99,9 +100,18 @@ function formatWhen(ts: any): string {
   return d.toLocaleString();
 }
 
+type ProducerView = 'overview' | 'products' | 'orders' | 'farm';
+
+const producerViewFromQuery = (value: string | null): ProducerView =>
+  value === 'products' || value === 'orders' || value === 'farm' || value === 'overview'
+    ? value
+    : 'overview';
+
 const ProducerDashboard = () => {
   const { user } = useAuth();
-  const [view, setView] = useState<'overview' | 'products' | 'orders' | 'farm'>('products');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = producerViewFromQuery(searchParams.get('view'));
+  const setView = (nextView: ProducerView) => setSearchParams({ view: nextView });
   const [creating, setCreating] = useState(false);
 
   const [products, setProducts] = useState<Product[]>([]);
@@ -463,11 +473,11 @@ const ProducerDashboard = () => {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:col-span-1 lg:block lg:space-y-2">
-          <button onClick={() => setView('overview')} className={`w-full text-left px-6 py-4 rounded-xl font-semibold transition ${view === 'overview' ? 'bg-green-100 text-green-800' : 'text-stone-600 hover:bg-stone-100'}`}>Dashboard</button>
-          <button onClick={() => setView('products')} className={`w-full text-left px-6 py-4 rounded-xl font-semibold transition ${view === 'products' ? 'bg-green-100 text-green-800' : 'text-stone-600 hover:bg-stone-100'}`}>Products</button>
-          <button onClick={() => setView('orders')} className={`w-full text-left px-6 py-4 rounded-xl font-semibold transition ${view === 'orders' ? 'bg-green-100 text-green-800' : 'text-stone-600 hover:bg-stone-100'}`}>Orders {stats.newOrders > 0 ? `(${stats.newOrders})` : ''}</button>
-          <button onClick={() => setView('farm')} className={`w-full text-left px-6 py-4 rounded-xl font-semibold transition ${view === 'farm' ? 'bg-green-100 text-green-800' : 'text-stone-600 hover:bg-stone-100'}`}>Farm Profile</button>
+        <div aria-label="Producer workspace" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:col-span-1 lg:block lg:space-y-2">
+          <button aria-pressed={view === 'overview'} onClick={() => setView('overview')} className={`w-full text-left px-4 py-3 lg:px-6 lg:py-4 rounded-xl font-semibold transition ${view === 'overview' ? 'bg-green-100 text-green-800 shadow-sm' : 'bg-white text-stone-600 hover:bg-stone-100'}`}>Dashboard</button>
+          <button aria-pressed={view === 'products'} onClick={() => setView('products')} className={`w-full text-left px-4 py-3 lg:px-6 lg:py-4 rounded-xl font-semibold transition ${view === 'products' ? 'bg-green-100 text-green-800 shadow-sm' : 'bg-white text-stone-600 hover:bg-stone-100'}`}>Products</button>
+          <button aria-pressed={view === 'orders'} onClick={() => setView('orders')} className={`w-full text-left px-4 py-3 lg:px-6 lg:py-4 rounded-xl font-semibold transition ${view === 'orders' ? 'bg-green-100 text-green-800 shadow-sm' : 'bg-white text-stone-600 hover:bg-stone-100'}`}>Orders {stats.newOrders > 0 ? `(${stats.newOrders})` : ''}</button>
+          <button aria-pressed={view === 'farm'} onClick={() => setView('farm')} className={`w-full text-left px-4 py-3 lg:px-6 lg:py-4 rounded-xl font-semibold transition ${view === 'farm' ? 'bg-green-100 text-green-800 shadow-sm' : 'bg-white text-stone-600 hover:bg-stone-100'}`}>Farm Profile</button>
         </div>
 
         <div className="lg:col-span-3">

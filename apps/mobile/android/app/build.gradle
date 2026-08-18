@@ -13,8 +13,8 @@ android {
         applicationId "com.mainefarmmarket.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "1.8"
+        versionCode 10
+        versionName "1.9"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -53,6 +53,10 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation "com.android.billingclient:billing:9.1.0"
+    // The Firebase authentication plugin compiles against this API but keeps it
+    // runtime-only. Expose it to the app so our small chooser-reset plugin can
+    // clear the legacy Google account cache before each explicit sign-in.
+    implementation "com.google.android.gms:play-services-auth:21.1.1"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

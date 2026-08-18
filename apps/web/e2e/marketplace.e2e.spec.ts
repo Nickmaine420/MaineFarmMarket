@@ -93,11 +93,27 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await page.getByRole("button", { name: /Shop the Market/ }).click();
     await expect(page.getByRole("heading", { name: "Fresh from Maine" })).toBeVisible();
 
+    const appNavigation = page.getByRole("navigation", { name: "App navigation" });
+    await expect(appNavigation.getByRole("link", { name: "Market", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(appNavigation.getByRole("link", { name: "Orders", exact: true })).toBeVisible();
+    await expect(appNavigation.getByRole("link", { name: "Cart", exact: true })).toBeVisible();
+    await expect(appNavigation.getByRole("link", { name: "Account", exact: true })).toBeVisible();
+
+    await appNavigation.getByRole("link", { name: "Orders", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Your Orders" })).toBeVisible();
+    await appNavigation.getByRole("link", { name: "Cart", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Cart" })).toBeVisible();
+    await appNavigation.getByRole("link", { name: "Account", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Account and safety" })).toBeVisible();
+    await appNavigation.getByRole("link", { name: "Market", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Fresh from Maine" })).toBeVisible();
+
     const menu = page.getByRole("button", { name: "Open navigation menu" });
     await expect(menu).toBeVisible();
     await menu.click();
     await expect(page.getByRole("link", { name: "Contact & support" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Account & safety" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "Marketplace" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("link", { name: "Account & safety" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(1);
 
     const overflow = await page.evaluate(
@@ -117,6 +133,16 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await expect(page.getByRole("button", { name: "Manage Subscription" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Products", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /^Orders(?: \(\d+\))?$/ })).toBeVisible();
+
+    const appNavigation = page.getByRole("navigation", { name: "App navigation" });
+    await appNavigation.getByRole("link", { name: "Products", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Your Products" })).toBeVisible();
+    await appNavigation.getByRole("link", { name: "Orders", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Incoming Orders" })).toBeVisible();
+    await appNavigation.getByRole("link", { name: "Farm", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Farm Profile" })).toBeVisible();
+    await appNavigation.getByRole("link", { name: "Home", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
 
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth

@@ -4,8 +4,8 @@
 
 - Application ID: `com.mainefarmmarket.app`
 - Firebase Android app ID: `1:275379861196:android:52532d7cdfc236f9013469`
-- Version name: `1.8`
-- Version code: `9`
+- Version name: `1.9`
+- Version code: `10`
 - Target SDK: 36
 
 ## Build

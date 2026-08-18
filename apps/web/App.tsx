@@ -26,6 +26,12 @@ import { Capacitor } from '@capacitor/core';
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import { PRODUCER_TERMS_VERSION } from '@mfm/shared';
 import { isNativeAndroidApp } from './utils/platform';
+import { signInWithGoogleAccountChooser } from './services/googleSignIn';
+import {
+  AppNavigationIcon,
+  isNavigationTargetActive,
+  navigationItemsForRole,
+} from './utils/navigation';
 import {
   GOOGLE_PLAY_PRODUCER_SUBSCRIPTION_ID,
   obfuscatePlayAccountId,
@@ -175,14 +181,7 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
         );
         firebaseUser = result.user;
       } else if (Capacitor.isNativePlatform()) {
-        const result = await FirebaseAuthentication.signInWithGoogle({
-          skipNativeAuth: true,
-          // The Credential Manager path can fail before showing the account
-          // chooser on some Play-installed Samsung builds. Use the plugin's
-          // Google Play Services flow, which is supported across our Android
-          // device range and still returns the ID token needed by Firebase JS.
-          useCredentialManager: false,
-        });
+        const result = await signInWithGoogleAccountChooser();
         const idToken = result.credential?.idToken;
         if (!idToken) throw new Error("Google Sign-In did not return an ID token.");
         const credential = GoogleAuthProvider.credential(
@@ -193,6 +192,7 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
         firebaseUser = resultCredential.user;
       } else {
         const provider = new GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: "select_account" });
         const result = await signInWithPopup(auth, provider);
         firebaseUser = result.user;
       }
@@ -622,6 +622,53 @@ const SubscribeCancel: React.FC = () => {
   );
 };
 
+const NavigationIcon = ({ icon }: { icon: AppNavigationIcon }) => {
+  const paths: Record<AppNavigationIcon, React.ReactNode> = {
+    market: <><path d="M4 10h16"/><path d="m5 10 1-5h12l1 5"/><path d="M6 10v9h12v-9"/><path d="M9 19v-5h6v5"/></>,
+    orders: <><path d="M7 4h10v16H7z"/><path d="M9.5 8h5M9.5 12h5M9.5 16h3"/></>,
+    cart: <><path d="M3 4h2l2 11h10l2-7H6"/><circle cx="9" cy="19" r="1"/><circle cx="17" cy="19" r="1"/></>,
+    account: <><circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></>,
+    dashboard: <><path d="M4 4h6v7H4zM14 4h6v4h-6zM14 12h6v8h-6zM4 15h6v5H4z"/></>,
+    products: <><path d="m4 8 8-4 8 4-8 4z"/><path d="M4 8v8l8 4 8-4V8M12 12v8"/></>,
+    farm: <><path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></>,
+  };
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      {paths[icon]}
+    </svg>
+  );
+};
+
+const RoleNavigationLinks = ({
+  role,
+  mobile = false,
+}: {
+  role: UserRole;
+  mobile?: boolean;
+}) => {
+  const location = useLocation();
+  return (
+    <>
+      {navigationItemsForRole(role).map((item) => {
+        const active = isNavigationTargetActive(location.pathname, location.search, item.to);
+        return (
+          <Link
+            key={item.to}
+            to={item.to}
+            aria-current={active ? "page" : undefined}
+            className={`${mobile ? "mfm-nav-link flex items-center gap-3" : "mfm-nav-link"} ${
+              active ? "bg-emerald-100 text-emerald-950" : ""
+            }`}
+          >
+            {mobile && <NavigationIcon icon={item.icon} />}
+            {item.label}
+          </Link>
+        );
+      })}
+    </>
+  );
+};
+
 // --- Header ---
 const Header = () => {
   const { user, logout } = useAuth();
@@ -630,15 +677,17 @@ const Header = () => {
 
   useEffect(() => {
     setMenuOpen(false);
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   const accountName = user?.displayName || user?.email;
+  const homeTarget = user
+    ? user.role === UserRole.PRODUCER
+      ? "/producer?view=overview"
+      : "/buyer"
+    : "/";
 
   const signedInLinks = user ? (
     <>
-      <Link to="/account" className="mfm-nav-link">
-        Account & safety
-      </Link>
       {isAdminEmail(user.email) && (
         <Link to="/admin" className="mfm-nav-link text-amber-800">
           Administration
@@ -670,7 +719,7 @@ const Header = () => {
     <header className="mfm-app-header sticky top-0 z-50 border-b border-stone-200 bg-white/95 shadow-sm backdrop-blur">
       <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-3 px-4 py-2">
         <Link
-          to="/"
+          to={homeTarget}
           aria-label="Maine Farm Market home"
           className="flex min-w-0 items-center gap-3"
         >
@@ -684,21 +733,14 @@ const Header = () => {
           </span>
         </Link>
 
-        <nav aria-label="Primary navigation" className="hidden items-center gap-1 md:flex">
+        <nav aria-label="Primary navigation" className="hidden items-center gap-1 xl:flex">
+          {user && <RoleNavigationLinks role={user.role} />}
           <Link to="/contact" className="mfm-nav-link">
             Contact
           </Link>
           <a href="/privacy.html" className="mfm-nav-link">
             Privacy
           </a>
-          {user && (
-            <span
-              className="max-w-40 truncate px-2 text-sm font-medium text-stone-600"
-              title={accountName || undefined}
-            >
-              {accountName}
-            </span>
-          )}
           {signedInLinks}
         </nav>
 
@@ -708,7 +750,7 @@ const Header = () => {
           aria-controls="mobile-navigation"
           aria-label={menuOpen ? "Close navigation menu" : "Open navigation menu"}
           onClick={() => setMenuOpen((open) => !open)}
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-stone-200 bg-white text-emerald-950 md:hidden"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-stone-200 bg-white text-emerald-950 xl:hidden"
         >
           {menuOpen ? (
             <svg
@@ -736,7 +778,7 @@ const Header = () => {
         <nav
           id="mobile-navigation"
           aria-label="Mobile navigation"
-          className="border-t border-stone-200 bg-white px-4 pb-4 pt-3 md:hidden"
+          className="border-t border-stone-200 bg-white px-4 pb-4 pt-3 xl:hidden"
         >
           {user && (
             <p className="mb-3 truncate rounded-xl bg-stone-100 px-3 py-2 text-sm text-stone-600">
@@ -744,7 +786,8 @@ const Header = () => {
               <span className="font-semibold text-stone-800">{accountName}</span>
             </p>
           )}
-          <div className="grid gap-1">
+          <div className="grid gap-1 sm:grid-cols-2">
+            {user && <RoleNavigationLinks role={user.role} mobile />}
             <Link to="/contact" className="mfm-nav-link">
               Contact & support
             </Link>
@@ -756,6 +799,58 @@ const Header = () => {
         </nav>
       )}
     </header>
+  );
+};
+
+const MobileBottomNavigation = () => {
+  const { user } = useAuth();
+  const location = useLocation();
+  if (!user) return null;
+
+  const buyerReady =
+    user.role === UserRole.BUYER &&
+    Boolean(user.userAgreementAcceptedAt) &&
+    user.buyerProfileComplete;
+  const producerReady =
+    user.role === UserRole.PRODUCER &&
+    user.producerTermsVersion === PRODUCER_TERMS_VERSION &&
+    Boolean(user.producerTermsAcceptedAt) &&
+    user.producerOnboardingComplete &&
+    user.subscriptionStatus === SubscriptionStatus.ACTIVE;
+  if (!buyerReady && !producerReady) return null;
+
+  const items = navigationItemsForRole(user.role);
+  return (
+    <>
+      <div aria-hidden="true" className="h-20 xl:hidden" />
+      <nav
+        aria-label="App navigation"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white/98 px-1 shadow-[0_-8px_24px_rgba(28,25,23,0.10)] backdrop-blur xl:hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        <div
+          className="mx-auto grid min-h-[4.5rem] max-w-xl items-stretch"
+          style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
+        >
+          {items.map((item) => {
+            const active = isNavigationTargetActive(location.pathname, location.search, item.to);
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                aria-current={active ? "page" : undefined}
+                className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[0.68rem] font-bold transition ${
+                  active ? "bg-emerald-50 text-emerald-950" : "text-stone-600"
+                }`}
+              >
+                <NavigationIcon icon={item.icon} />
+                <span className="max-w-full truncate">{item.shortLabel}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+    </>
   );
 };
 
@@ -910,6 +1005,7 @@ export default function App() {
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        <MobileBottomNavigation />
       </Router>
     </AuthProvider>
   );

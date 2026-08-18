@@ -30,3 +30,8 @@ Recorded during project organization on 2026-07-25:
   version 1.8. The new regression coverage verifies first-time Buyer setup, compact
   mobile navigation, mobile Producer controls, cold/warm lifecycle behavior, and
   portrait/landscape layout.
+- Version 1.9 (version code 10) clears Android's cached legacy Google account before
+  each sign-in so the device displays its account chooser. It adds role-aware
+  header navigation, a persistent phone/tablet bottom navigation bar, URL-backed
+  Producer workspace tabs, and responsive navigation breakpoints. Buyer and Producer
+  navigation paths are covered by mobile end-to-end tests.
