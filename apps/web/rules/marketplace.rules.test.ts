@@ -167,6 +167,29 @@ describe("marketplace Firestore rules", () => {
     await assertFails(getDoc(doc(database, "users/producer-1")));
   });
 
+  test("legacy farm profiles can opt into promotions without a forced migration", async () => {
+    await environment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "farms/producer-1"), {
+        producerUid: "producer-1",
+        farmName: "Legacy Farm",
+      });
+    });
+    const producer = environment.authenticatedContext("producer-1").firestore();
+    const buyer = environment.authenticatedContext("buyer-1").firestore();
+    await assertSucceeds(updateDoc(doc(producer, "farms/producer-1"), {
+      promoPageEnabled: true,
+      promoHeadline: "Seasonal specials",
+      promoDescription: "See what is fresh this week.",
+      updatedAt: serverTimestamp(),
+    }));
+    await assertFails(updateDoc(doc(producer, "farms/producer-1"), {
+      promoHeadline: "x".repeat(161),
+    }));
+    await assertFails(updateDoc(doc(buyer, "farms/producer-1"), {
+      promoPageEnabled: false,
+    }));
+  });
+
   test("listing reports must identify the listing's actual producer", async () => {
     await environment.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), "products/product-1"), validProduct);

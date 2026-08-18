@@ -13,30 +13,36 @@ export default function PromotionsPage() {
   const [products, setProducts] = useState<AnyDoc[]>([]);
   const [events, setEvents] = useState<AnyDoc[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    let ready = 0;
-    const markReady = () => {
-      ready += 1;
-      if (ready === 4) setLoading(false);
+    const readySources = new Set<string>();
+    const markReady = (source: string) => {
+      readySources.add(source);
+      if (readySources.size === 4) setLoading(false);
+    };
+    const handleError = (source: string, error: unknown) => {
+      console.error(`Promotion ${source} could not be refreshed`, error);
+      setLoadError("Some promotion information could not be refreshed. Please reopen this page to try again.");
+      markReady(source);
     };
     const subscriptions = [
       onSnapshot(collection(db, "farms"), (snapshot) => {
         setFarms(Object.fromEntries(snapshot.docs.map((item) => [item.id, { id: item.id, ...item.data() }])));
-        markReady();
-      }),
+        markReady("farms");
+      }, (error) => handleError("farms", error)),
       onSnapshot(query(collection(db, "promotions"), where("active", "==", true)), (snapshot) => {
         setPromotions(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
-        markReady();
-      }),
+        markReady("promotions");
+      }, (error) => handleError("promotions", error)),
       onSnapshot(collection(db, "products"), (snapshot) => {
         setProducts(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
-        markReady();
-      }),
+        markReady("products");
+      }, (error) => handleError("products", error)),
       onSnapshot(query(collection(db, "events"), where("status", "==", "published")), (snapshot) => {
         setEvents(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
-        markReady();
-      }),
+        markReady("events");
+      }, (error) => handleError("events", error)),
     ];
     return () => subscriptions.forEach((unsubscribe) => unsubscribe());
   }, []);
@@ -73,6 +79,7 @@ export default function PromotionsPage() {
           <p className="mt-4 max-w-2xl text-lg text-orange-50">A shared promotion space created by Maine Farm Market producers.</p>
         </section>
 
+        {loadError && <div role="alert" className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-900">{loadError}</div>}
         {loading ? <div className="mt-6 rounded-2xl bg-white p-8 text-center">Loading producer promotions…</div> : (
           <>
             <section className="mt-8">

@@ -77,9 +77,13 @@ export function HashRouter({ children }: { children: React.ReactNode }) {
   const navigate = useCallback<NavigateFunction>(
     (to: string, options: NavigateOptions = {}) => {
       const target = normalizeRouteTarget(to);
+      const currentDepth = Number(
+        window.history.state?.maineFarmMarketDepth ?? 0
+      );
       const nextState = {
         ...(window.history.state ?? {}),
         maineFarmMarketRouteState: options.state ?? null,
+        maineFarmMarketDepth: options.replace ? currentDepth : currentDepth + 1,
       };
       const nextUrl = `#${target}`;
 

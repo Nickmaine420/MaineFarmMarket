@@ -198,6 +198,28 @@ service cloud.firestore {
           || (request.resource.data.promoDescription is string
             && request.resource.data.promoDescription.size() <= 1000))
         && !request.resource.data.keys().hasAny(["addressLine1"]);
+      // Some tester profiles predate the complete farm-profile schema. Let an
+      // owning producer opt that legacy record into promotions without forcing
+      // an unrelated profile migration in the same write.
+      allow update: if signedIn()
+        && request.auth.uid == farmId
+        && currentProfile().role == "producer"
+        && (!resource.data.keys().hasAny(["producerUid"])
+          || resource.data.producerUid == request.auth.uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "promoPageEnabled",
+          "promoHeadline",
+          "promoDescription",
+          "updatedAt"
+        ])
+        && (!request.resource.data.keys().hasAny(["promoPageEnabled"])
+          || request.resource.data.promoPageEnabled is bool)
+        && (!request.resource.data.keys().hasAny(["promoHeadline"])
+          || (request.resource.data.promoHeadline is string
+            && request.resource.data.promoHeadline.size() <= 160))
+        && (!request.resource.data.keys().hasAny(["promoDescription"])
+          || (request.resource.data.promoDescription is string
+            && request.resource.data.promoDescription.size() <= 1000));
       allow delete: if false;
     }
 
