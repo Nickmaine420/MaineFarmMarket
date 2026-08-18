@@ -16,6 +16,7 @@ import { db } from "../firebase";
 import { Link, useSearchParams } from "../router";
 import { UserRole } from "../types";
 import { milesBetween, monthCalendarCells } from "../utils/marketplaceFeatures";
+import { getCurrentCoordinates } from "../utils/location";
 
 type AnyDoc = Record<string, any>;
 type EventWithAttendees = AnyDoc & {
@@ -194,22 +195,18 @@ export default function EventsPage() {
     setSearchParams(next);
   };
 
-  const useLocation = () => {
-    if (!navigator.geolocation) {
-      setNotice("Location is not available on this device.");
-      return;
+  const useLocation = async () => {
+    try {
+      setNotice("Requesting your location…");
+      const next = await getCurrentCoordinates();
+      setLocation(next);
+      localStorage.setItem(BUYER_LOCATION_KEY, JSON.stringify(next));
+      setSort("distance");
+      setNotice("Events are now sorted from nearest to farthest.");
+    } catch (error) {
+      console.error(error);
+      setNotice("Allow location access in Android Settings to sort events by distance.");
     }
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const next = { lat: position.coords.latitude, lng: position.coords.longitude };
-        setLocation(next);
-        localStorage.setItem(BUYER_LOCATION_KEY, JSON.stringify(next));
-        setSort("distance");
-        setNotice("Events are now sorted from nearest to farthest.");
-      },
-      () => setNotice("Allow location access to sort events by distance."),
-      { enableHighAccuracy: true, timeout: 15000 }
-    );
   };
 
   const toggleAttendance = async (event: EventWithAttendees) => {

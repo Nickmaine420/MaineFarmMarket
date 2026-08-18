@@ -619,7 +619,11 @@ export default function CartPage() {
           </div>
 
           {!cart.items.length ? (
-            <div className="text-stone-600 mt-2">Your cart is empty.</div>
+            <div className="mt-5 rounded-xl bg-emerald-50 p-5 text-center">
+              <div className="font-bold text-emerald-950">Your cart is ready for something local.</div>
+              <p className="mt-1 text-sm text-emerald-800">Browse current Maine products and add an item before scheduling pickup or delivery.</p>
+              <button type="button" onClick={() => navigate("/buyer")} className="mt-4 rounded-xl bg-emerald-900 px-5 py-3 font-bold text-white">Browse the market</button>
+            </div>
           ) : (
             <div className="mt-4 space-y-3">
               {cart.items.map((it, idx) => (
@@ -697,7 +701,7 @@ export default function CartPage() {
             </div>
           )}
 
-          <div className="mt-6 border-t pt-4">
+          {cart.items.length > 0 && <div className="mt-6 border-t pt-4">
             <p className="mb-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-950">
               Payment follows each producer's preference. If every producer in the cart
               accepts Stripe, you will continue to secure online checkout and see the
@@ -836,7 +840,7 @@ export default function CartPage() {
             >
               {isLoading ? "Starting checkout…" : "Place Order"}
             </button>
-          </div>
+          </div>}
         </div>
       </div>
     </div>

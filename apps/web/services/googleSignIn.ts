@@ -17,9 +17,9 @@ export const signInWithGoogleAccountChooser = async (
   authClient: NativeGoogleAuthClient = FirebaseAuthentication,
   chooserClient: GoogleAccountChooserClient = GoogleAccountChooser
 ) => {
-  // The legacy Google Play Services flow works across the supported physical
-  // devices, but caches the last account. Await a native sign-out so its next
-  // sign-in intent presents the account picker instead of silently reusing it.
+  // Clear both the Firebase Authentication plugin and the legacy Google Play
+  // Services client. They maintain separate session caches on Android.
+  await authClient.signOut();
   await chooserClient.clearLastAccount();
   return authClient.signInWithGoogle({
     skipNativeAuth: true,

@@ -23,6 +23,7 @@ import {
   PlayBilling,
 } from '../services/playBilling';
 import { activeProductDiscount, salePriceFromPercent } from '../utils/marketplaceFeatures';
+import { formatMarketplaceLabel } from '../utils/display';
 
 type Product = {
   id: string;
@@ -634,7 +635,7 @@ const ProducerDashboard = () => {
                       <div key={orderId} className="border rounded-xl p-4">
                         <div className="flex items-start justify-between gap-4">
                           <div>
-                            <div className="font-bold text-stone-900">Order • {(o.status || "pending").toUpperCase()}</div>
+                            <div className="font-bold text-stone-900">Order · {formatMarketplaceLabel(o.status || "pending")}</div>
                             <div className="text-stone-600 text-sm">
                               Buyer: {o.buyerName || o.buyerId || "Buyer"} {o.buyerEmail ? `• ${o.buyerEmail}` : ""}
                             </div>

@@ -12,6 +12,7 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { useNavigate } from "../router";
+import { formatMarketplaceLabel } from "../utils/display";
 
 function formatMoney(cents: number) {
   const n = Number(cents || 0) / 100;
@@ -436,7 +437,7 @@ export default function BuyerOrdersPage() {
                   <div className="font-bold">Order #{o.id.slice(-8)}</div>
                   <div className="text-sm">
                     <span className="font-semibold">Status:</span>{" "}
-                    <span className="uppercase">{o.status || "Unknown"}</span>
+                    <span>{formatMarketplaceLabel(o.status)}</span>
                   </div>
                 </div>
 
@@ -530,7 +531,7 @@ export default function BuyerOrdersPage() {
                               o.producerStatuses?.[it.producerId]?.status && (
                               <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">
                                 Producer status:{" "}
-                                {o.producerStatuses[it.producerId].status?.replaceAll("_", " ")}
+                                {formatMarketplaceLabel(o.producerStatuses[it.producerId].status)}
                               </div>
                             )}
                           </div>

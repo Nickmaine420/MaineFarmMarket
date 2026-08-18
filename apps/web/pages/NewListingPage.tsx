@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../App";
-import { auth, db, storage } from "../firebase";
+import { auth, db } from "../firebase";
+import { storage } from "../firebaseStorage";
 import { collection, addDoc, doc, getDoc, setDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { toPriceCents, toWholeQuantity } from "../utils/validation";

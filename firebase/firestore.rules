@@ -135,27 +135,10 @@ service cloud.firestore {
       }
     }
 
-    // Signed-in members may submit safety reports. Reports are intentionally
-    // write-only to clients and are reviewed through trusted administrative tools.
+    // Listing reports are validated, deduplicated, and rate-limited by the
+    // trusted submitListingReport Cloud Function.
     match /reports/{reportId} {
-      allow create: if signedIn()
-        && request.resource.data.reporterId == request.auth.uid
-        && request.resource.data.type == "listing"
-        && request.resource.data.listingId is string
-        && request.resource.data.listingId.size() > 0
-        && request.resource.data.reportedUserId is string
-        && exists(/databases/$(database)/documents/products/$(request.resource.data.listingId))
-        && (
-          get(/databases/$(database)/documents/products/$(request.resource.data.listingId)).data.producerId
-            == request.resource.data.reportedUserId
-          || get(/databases/$(database)/documents/products/$(request.resource.data.listingId)).data.producerUid
-            == request.resource.data.reportedUserId
-        )
-        && request.resource.data.reason is string
-        && request.resource.data.reason.size() > 0
-        && request.resource.data.reason.size() <= 1000
-        && request.resource.data.status == "open";
-      allow read, update, delete: if false;
+      allow read, create, update, delete: if false;
     }
 
     // Farm profiles are marketplace information. Only the owning producer writes.
@@ -370,16 +353,21 @@ service cloud.firestore {
       allow update: if activeProducer(request.auth.uid)
         && resource.data.memberIds.hasAny([request.auth.uid])
         && request.resource.data.memberIds == resource.data.memberIds
-        && request.resource.data.requestedBy == resource.data.requestedBy
         && validPartnership(request.resource.data)
         && (
           (resource.data.status == "pending"
             && request.auth.uid != resource.data.requestedBy
+            && request.resource.data.requestedBy == resource.data.requestedBy
             && request.resource.data.status in ["accepted", "declined"])
           || (resource.data.status in ["pending", "accepted"]
+            && request.resource.data.requestedBy == resource.data.requestedBy
             && request.resource.data.status == "cancelled")
           || (resource.data.status == "accepted"
+            && request.resource.data.requestedBy == resource.data.requestedBy
             && request.resource.data.status == "accepted")
+          || (resource.data.status in ["declined", "cancelled"]
+            && request.resource.data.status == "pending"
+            && request.resource.data.requestedBy == request.auth.uid)
         );
       allow delete: if false;
     }

@@ -12,9 +12,22 @@ const {
   deriveBuyerOrderStatus,
   effectiveProductPriceCents,
   normalizeRequestedItems,
+  normalizeListingReportReason,
   pendingDirectProducerIds,
   validateScheduledAt,
 } = require("../marketplace");
+
+test("listing reports require a detailed normalized explanation", () => {
+  assert.equal(
+    normalizeListingReportReason("  Product   contains an unsafe ingredient.  "),
+    "Product contains an unsafe ingredient."
+  );
+  assert.throws(() => normalizeListingReportReason("short"), /20 characters/);
+  assert.throws(
+    () => normalizeListingReportReason("spam spam spam spam spam"),
+    /meaningful words/
+  );
+});
 
 test("expired product discounts revert to the trusted regular price", () => {
   const now = Date.parse("2026-08-18T12:00:00.000Z");

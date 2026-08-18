@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   collection,
   collectionGroup,
-  getDoc,
   onSnapshot,
   query,
   where,
@@ -20,20 +19,25 @@ export default function PublicProducerProfilePage() {
   const [farm, setFarm] = useState<AnyDoc | null>(null);
   const [farms, setFarms] = useState<Record<string, AnyDoc>>({});
   const [products, setProducts] = useState<AnyDoc[]>([]);
-  const [events, setEvents] = useState<AnyDoc[]>([]);
+  const [publishedEvents, setPublishedEvents] = useState<AnyDoc[]>([]);
+  const [attendingEventIds, setAttendingEventIds] = useState<string[]>([]);
   const [recommendations, setRecommendations] = useState<AnyDoc[]>([]);
   const [partnerships, setPartnerships] = useState<AnyDoc[]>([]);
   const [farmLoaded, setFarmLoaded] = useState(false);
-  const [eventsLoaded, setEventsLoaded] = useState(false);
+  const [publishedEventsLoaded, setPublishedEventsLoaded] = useState(false);
+  const [attendanceLoaded, setAttendanceLoaded] = useState(false);
 
   useEffect(() => {
     setFarmLoaded(false);
-    setEventsLoaded(false);
+    setPublishedEventsLoaded(false);
+    setAttendanceLoaded(false);
     setFarm(null);
-    setEvents([]);
+    setPublishedEvents([]);
+    setAttendingEventIds([]);
     if (!producerId) {
       setFarmLoaded(true);
-      setEventsLoaded(true);
+      setPublishedEventsLoaded(true);
+      setAttendanceLoaded(true);
       return;
     }
     const unsubscribeFarms = onSnapshot(collection(db, "farms"), (snapshot) => {
@@ -58,53 +62,59 @@ export default function PublicProducerProfilePage() {
       ),
       (snapshot) => setPartnerships(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))
     );
-    let profileIsCurrent = true;
-    const unsubscribeEvents = onSnapshot(
-      query(collectionGroup(db, "attendees"), where("producerId", "==", producerId)),
-      async (snapshot) => {
-        try {
-          const attending = await Promise.all(
-            snapshot.docs.map(async (attendee) => {
-              const eventRef = attendee.ref.parent.parent;
-              if (!eventRef) return null;
-              const eventDoc = await getDoc(eventRef);
-              return eventDoc.exists() && eventDoc.data().status === "published"
-                ? { id: eventDoc.id, ...eventDoc.data() }
-                : null;
-            })
-          );
-          if (profileIsCurrent) setEvents(attending.filter(Boolean) as AnyDoc[]);
-        } catch (error) {
-          console.error(error);
-        } finally {
-          if (profileIsCurrent) setEventsLoaded(true);
-        }
+    const unsubscribePublishedEvents = onSnapshot(
+      query(collection(db, "events"), where("status", "==", "published")),
+      (snapshot) => {
+        setPublishedEvents(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
+        setPublishedEventsLoaded(true);
       },
       (error) => {
-        console.error(error);
-        if (profileIsCurrent) setEventsLoaded(true);
+        console.error("Published producer events could not be refreshed", error);
+        setPublishedEventsLoaded(true);
+      }
+    );
+    const unsubscribeAttendance = onSnapshot(
+      query(collectionGroup(db, "attendees"), where("producerId", "==", producerId)),
+      (snapshot) => {
+        setAttendingEventIds(
+          snapshot.docs
+            .map((attendee) => attendee.ref.parent.parent?.id || "")
+            .filter(Boolean)
+        );
+        setAttendanceLoaded(true);
+      },
+      (error) => {
+        console.error("Producer event attendance could not be refreshed", error);
+        setAttendanceLoaded(true);
       }
     );
     return () => {
-      profileIsCurrent = false;
       unsubscribeFarms();
       unsubscribeProducts();
       unsubscribeRecommendations();
       unsubscribePartnerships();
-      unsubscribeEvents();
+      unsubscribePublishedEvents();
+      unsubscribeAttendance();
     };
   }, [producerId]);
 
   const visibleProducts = products.filter((product) => product.archived !== true && product.inStock !== false);
   const acceptedPartners = partnerships.filter((partnership) => partnership.status === "accepted");
-  const upcomingEvents = events.filter((event) => toDate(event.endAt).getTime() >= Date.now()).sort((first, second) => toDate(first.startAt).getTime() - toDate(second.startAt).getTime());
+  const attendingEventIdSet = useMemo(
+    () => new Set(attendingEventIds),
+    [attendingEventIds]
+  );
+  const upcomingEvents = publishedEvents
+    .filter((event) => attendingEventIdSet.has(event.id))
+    .filter((event) => toDate(event.endAt).getTime() >= Date.now())
+    .sort((first, second) => toDate(first.startAt).getTime() - toDate(second.startAt).getTime());
   const recommendedFarms = useMemo(
     () => recommendations.map((item) => ({ recommendation: item, farm: farms[item.recommendedProducerId] })).filter((item) => item.farm),
     [farms, recommendations]
   );
 
   if (!producerId) return <main className="min-h-screen bg-[#f6f0dd] p-8 text-center"><h1 className="text-2xl font-bold">Producer not selected</h1><Link to="/buyer" className="mt-4 inline-block underline">Return to the market</Link></main>;
-  if (!farmLoaded || !eventsLoaded) return <main className="min-h-screen bg-[#f6f0dd] p-8 text-center">Loading producer profile…</main>;
+  if (!farmLoaded || !publishedEventsLoaded || !attendanceLoaded) return <main className="min-h-screen bg-[#f6f0dd] p-8 text-center">Loading producer profile…</main>;
   if (!farm) return <main className="min-h-screen bg-[#f6f0dd] p-8 text-center"><h1 className="text-2xl font-bold">Producer profile unavailable</h1><p className="mt-2 text-stone-600">This producer has not published a farm profile yet.</p><Link to="/buyer" className="mt-4 inline-block underline">Return to the market</Link></main>;
 
   return (

@@ -83,8 +83,8 @@ export default function UserAgreementPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#efe1b6] flex flex-col items-center p-6">
-      <div className="max-w-2xl w-full bg-white rounded-2xl shadow-lg p-6 flex flex-col max-h-[90vh]">
+    <div className="mfm-safe-screen flex flex-col items-center bg-[#efe1b6] px-4 sm:px-6">
+      <div className="flex max-h-[calc(100dvh-3rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-2xl flex-col rounded-2xl bg-white p-5 shadow-lg sm:p-6">
         <h1 className="text-2xl font-bold text-stone-800 mb-4">User Agreement</h1>
         <p className="text-sm text-stone-600 mb-4">Please read and accept the agreement below to continue.</p>
         {errorMessage && (
@@ -107,7 +107,7 @@ export default function UserAgreementPage() {
         <button
           onClick={handleContinue}
           disabled={!agreed || submitting}
-          className="w-full py-3 rounded-xl font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          className="min-h-12 w-full shrink-0 rounded-xl py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
           style={{ background: agreed && !submitting ? "#0f7a4a" : "#888" }}
         >
           {submitting ? "Saving…" : "Continue"}

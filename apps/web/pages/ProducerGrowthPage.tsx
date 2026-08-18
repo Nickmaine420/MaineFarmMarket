@@ -4,6 +4,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  increment,
   onSnapshot,
   query,
   serverTimestamp,
@@ -207,8 +208,33 @@ export default function ProducerGrowthPage() {
     if (!user || !partnerProducerId || (!partnerPickup && !partnerDelivery)) return;
     const id = producerPartnershipId(user.uid, partnerProducerId);
     const memberIds = [user.uid, partnerProducerId].sort();
+    const existing = partnerships.find((item) => item.id === id);
     await runAction(async () => {
-      await setDoc(doc(db, "producerPartnerships", id), { memberIds, requestedBy: user.uid, status: "pending", pickupEnabled: partnerPickup, deliveryEnabled: partnerDelivery, publicNote: partnerNote.trim(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      const partnershipRef = doc(db, "producerPartnerships", id);
+      if (existing && ["cancelled", "declined"].includes(existing.status)) {
+        await updateDoc(partnershipRef, {
+          requestedBy: user.uid,
+          status: "pending",
+          pickupEnabled: partnerPickup,
+          deliveryEnabled: partnerDelivery,
+          publicNote: partnerNote.trim(),
+          requestCount: increment(1),
+          reopenedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(partnershipRef, {
+          memberIds,
+          requestedBy: user.uid,
+          status: "pending",
+          pickupEnabled: partnerPickup,
+          deliveryEnabled: partnerDelivery,
+          publicNote: partnerNote.trim(),
+          requestCount: 1,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
       setPartnerProducerId("");
       setPartnerNote("");
     }, "Partnership request sent. It becomes public only after the other producer accepts.");
@@ -236,7 +262,7 @@ export default function ProducerGrowthPage() {
 
         {tab === "network" && <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <section className="rounded-2xl bg-white p-6 shadow"><h2 className="text-2xl font-bold">Recommend a producer</h2><p className="mt-2 text-sm text-stone-600">Recommendations appear publicly on your producer profile.</p><form onSubmit={recommendProducer}><label className="mt-4 block text-sm font-bold">Producer<select required value={recommendedProducerId} onChange={(event) => setRecommendedProducerId(event.target.value)} className="mt-1 w-full rounded-xl border p-3 font-normal"><option value="">Choose a producer</option>{otherFarms.filter((farm) => !recommendations.some((item) => item.recommendedProducerId === farm.id)).map((farm) => <option key={farm.id} value={farm.id}>{farm.farmName}</option>)}</select></label><label className="mt-4 block text-sm font-bold">Why you recommend them<textarea maxLength={500} value={recommendationNote} onChange={(event) => setRecommendationNote(event.target.value)} className="mt-1 min-h-24 w-full rounded-xl border p-3 font-normal" /></label><button disabled={saving} className="mt-4 rounded-xl bg-emerald-900 px-5 py-3 font-bold text-white disabled:opacity-50">Publish recommendation</button></form><div className="mt-5 space-y-2">{recommendations.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl bg-stone-50 p-3"><div><div className="font-bold">{farms[item.recommendedProducerId]?.farmName || 'Producer'}</div><div className="text-sm text-stone-600">{item.note}</div></div><button onClick={() => runAction(() => deleteDoc(doc(db, 'producerRecommendations', item.id)), 'Recommendation removed.')} className="text-sm font-bold text-red-700 underline">Remove</button></div>)}</div></section>
-          <section className="rounded-2xl bg-white p-6 shadow"><h2 className="text-2xl font-bold">Request a partnership</h2><p className="mt-2 text-sm text-stone-600">The other producer must accept. Accepted pickup partners can be selected by buyers during checkout.</p><form onSubmit={requestPartnership}><label className="mt-4 block text-sm font-bold">Producer<select required value={partnerProducerId} onChange={(event) => setPartnerProducerId(event.target.value)} className="mt-1 w-full rounded-xl border p-3 font-normal"><option value="">Choose a producer</option>{otherFarms.filter((farm) => !partnerships.some((item) => item.memberIds?.includes(farm.id) && !['declined','cancelled'].includes(item.status))).map((farm) => <option key={farm.id} value={farm.id}>{farm.farmName}</option>)}</select></label><div className="mt-4 flex flex-wrap gap-4"><label className="flex items-center gap-2 font-bold"><input type="checkbox" checked={partnerPickup} onChange={(event) => setPartnerPickup(event.target.checked)} />Shared pickup</label><label className="flex items-center gap-2 font-bold"><input type="checkbox" checked={partnerDelivery} onChange={(event) => setPartnerDelivery(event.target.checked)} />Delivery support</label></div><label className="mt-4 block text-sm font-bold">Public partnership note<textarea maxLength={500} value={partnerNote} onChange={(event) => setPartnerNote(event.target.value)} className="mt-1 min-h-24 w-full rounded-xl border p-3 font-normal" /></label><button disabled={saving || (!partnerPickup && !partnerDelivery)} className="mt-4 rounded-xl bg-orange-600 px-5 py-3 font-bold text-white disabled:opacity-50">Send request</button></form></section>
+          <section className="rounded-2xl bg-white p-6 shadow"><h2 className="text-2xl font-bold">Request a partnership</h2><p className="mt-2 text-sm text-stone-600">The other producer must accept. Ended or declined partnerships can be requested again without deleting their history.</p><form onSubmit={requestPartnership}><label className="mt-4 block text-sm font-bold">Producer<select required value={partnerProducerId} onChange={(event) => setPartnerProducerId(event.target.value)} className="mt-1 w-full rounded-xl border p-3 font-normal"><option value="">Choose a producer</option>{otherFarms.filter((farm) => !partnerships.some((item) => item.memberIds?.includes(farm.id) && !['declined','cancelled'].includes(item.status))).map((farm) => <option key={farm.id} value={farm.id}>{farm.farmName}</option>)}</select></label><div className="mt-4 flex flex-wrap gap-4"><label className="flex items-center gap-2 font-bold"><input type="checkbox" checked={partnerPickup} onChange={(event) => setPartnerPickup(event.target.checked)} />Shared pickup</label><label className="flex items-center gap-2 font-bold"><input type="checkbox" checked={partnerDelivery} onChange={(event) => setPartnerDelivery(event.target.checked)} />Delivery support</label></div><label className="mt-4 block text-sm font-bold">Public partnership note<textarea maxLength={500} value={partnerNote} onChange={(event) => setPartnerNote(event.target.value)} className="mt-1 min-h-24 w-full rounded-xl border p-3 font-normal" /></label><button disabled={saving || (!partnerPickup && !partnerDelivery)} className="mt-4 rounded-xl bg-orange-600 px-5 py-3 font-bold text-white disabled:opacity-50">Send request</button></form></section>
           <section className="rounded-2xl bg-white p-6 shadow lg:col-span-2"><h2 className="text-2xl font-bold">Partnerships and requests</h2>{partnerships.length === 0 ? <p className="mt-3 text-stone-600">No partnership requests yet.</p> : <div className="mt-4 grid gap-4 md:grid-cols-2">{partnerships.map((item) => { const partnerId = item.memberIds.find((id: string) => id !== user.uid); const incoming = item.status === 'pending' && item.requestedBy !== user.uid; return <article key={item.id} className="rounded-xl border p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-bold">{farms[partnerId]?.farmName || 'Producer partner'}</h3><p className="mt-1 text-sm text-stone-600">{item.publicNote}</p></div><span className="rounded-full bg-stone-100 px-2 py-1 text-xs font-bold">{item.status}</span></div><div className="mt-3 flex gap-2 text-xs font-bold">{item.pickupEnabled && <span className="rounded-full bg-emerald-100 px-2 py-1">Pickup</span>}{item.deliveryEnabled && <span className="rounded-full bg-orange-100 px-2 py-1">Delivery</span>}</div>{incoming && <div className="mt-4 flex gap-2"><button onClick={() => runAction(() => updateDoc(doc(db, 'producerPartnerships', item.id), { status: 'accepted', updatedAt: serverTimestamp() }), 'Partnership accepted and now public.')} className="rounded-lg bg-emerald-900 px-3 py-2 font-bold text-white">Accept</button><button onClick={() => runAction(() => updateDoc(doc(db, 'producerPartnerships', item.id), { status: 'declined', updatedAt: serverTimestamp() }), 'Partnership declined.')} className="rounded-lg bg-stone-100 px-3 py-2 font-bold">Decline</button></div>}{item.status === 'accepted' && <button onClick={() => runAction(() => updateDoc(doc(db, 'producerPartnerships', item.id), { status: 'cancelled', updatedAt: serverTimestamp() }), 'Partnership ended and preserved in history.')} className="mt-4 text-sm font-bold text-red-700 underline">End partnership</button>}{item.status === 'pending' && item.requestedBy === user.uid && <button onClick={() => runAction(() => updateDoc(doc(db, 'producerPartnerships', item.id), { status: 'cancelled', updatedAt: serverTimestamp() }), 'Partnership request cancelled.')} className="mt-4 text-sm font-bold text-red-700 underline">Cancel request</button>}</article>;})}</div>}</section>
         </div>}
       </div>

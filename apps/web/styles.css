@@ -38,4 +38,36 @@
   .mfm-nav-link {
     @apply min-h-11 rounded-lg px-3 py-2.5 text-sm font-bold text-emerald-800 transition hover:bg-emerald-50 hover:text-emerald-950;
   }
+
+  .mfm-safe-screen {
+    min-height: 100dvh;
+    padding-top: max(1.5rem, env(safe-area-inset-top));
+    padding-bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem));
+  }
+}
+
+div.bg-stone-200:empty.h-40,
+div.bg-stone-200:empty.h-48,
+div.bg-stone-200:empty.h-44 {
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 72% 22%, rgb(251 191 36 / 24%), transparent 32%),
+    linear-gradient(145deg, #edf6e8, #f6edd4);
+  color: #476354;
+}
+
+div.bg-stone-200:empty.h-40::before,
+div.bg-stone-200:empty.h-48::before,
+div.bg-stone-200:empty.h-44::before {
+  content: "Fresh photo coming soon";
+  max-width: 10rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(23 63 50 / 14%);
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 72%);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
 }

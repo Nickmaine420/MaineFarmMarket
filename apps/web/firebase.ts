@@ -2,7 +2,6 @@
 import { initializeApp } from "firebase/app";
 import { connectAuthEmulator, getAuth, GoogleAuthProvider } from "firebase/auth";
 import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
-import { connectStorageEmulator, getStorage } from "firebase/storage";
 import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
@@ -20,8 +19,6 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
 export const db = getFirestore(app);
-export const storage = getStorage(app);
-
 // IMPORTANT: your deployed functions are in us-central1
 export const functions = getFunctions(app, "us-central1");
 
@@ -29,7 +26,7 @@ export const isFirebaseEmulatorMode =
   import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === "true";
 
 if (isFirebaseEmulatorMode) {
-  const emulatorFlag = "__mfmFirebaseEmulatorsConnected";
+  const emulatorFlag = "__mfmCoreFirebaseEmulatorsConnected";
   const globalState = globalThis as typeof globalThis & Record<string, unknown>;
   if (!globalState[emulatorFlag]) {
     connectAuthEmulator(auth, "http://127.0.0.1:9099", {
@@ -37,7 +34,6 @@ if (isFirebaseEmulatorMode) {
     });
     connectFirestoreEmulator(db, "127.0.0.1", 8080);
     connectFunctionsEmulator(functions, "127.0.0.1", 5001);
-    connectStorageEmulator(storage, "127.0.0.1", 9199);
     globalState[emulatorFlag] = true;
   }
 }

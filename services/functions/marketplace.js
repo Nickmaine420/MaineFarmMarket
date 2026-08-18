@@ -7,6 +7,25 @@ const DELIVERY_MIN_LEAD_MS = 24 * 60 * 60 * 1000;
 const DIRECT_ORDER_MAX_HOLD_MS = 24 * 60 * 60 * 1000;
 const DIRECT_ORDER_MIN_HOLD_MS = 30 * 60 * 1000;
 const DIRECT_ORDER_SCHEDULE_BUFFER_MS = 30 * 60 * 1000;
+const LISTING_REPORT_MIN_LENGTH = 20;
+const LISTING_REPORT_MAX_LENGTH = 1000;
+
+function normalizeListingReportReason(value) {
+  const reason = String(value || "").replace(/\s+/g, " ").trim();
+  const words = reason ? reason.split(" ") : [];
+  const distinctWords = new Set(words.map((word) => word.toLowerCase()));
+  if (
+    reason.length < LISTING_REPORT_MIN_LENGTH ||
+    reason.length > LISTING_REPORT_MAX_LENGTH ||
+    words.length < 4 ||
+    distinctWords.size < 3
+  ) {
+    throw new Error(
+      "Describe the listing concern in at least 20 characters and four meaningful words."
+    );
+  }
+  return reason;
+}
 
 function effectiveProductPriceCents(product, nowMs = Date.now()) {
   const storedPriceCents = Number.isInteger(product?.priceCents)
@@ -237,6 +256,8 @@ module.exports = {
   DELIVERY_MIN_LEAD_MS,
   MAX_CART_ITEMS,
   MAX_ITEM_QUANTITY,
+  LISTING_REPORT_MAX_LENGTH,
+  LISTING_REPORT_MIN_LENGTH,
   PICKUP_MIN_LEAD_MS,
   buildGooglePlayProducerMonthlyBasePlan,
   allocateRefundAcrossTransfers,
@@ -247,6 +268,7 @@ module.exports = {
   deriveBuyerOrderStatus,
   effectiveProductPriceCents,
   normalizeRequestedItems,
+  normalizeListingReportReason,
   pendingDirectProducerIds,
   validateScheduledAt,
 };

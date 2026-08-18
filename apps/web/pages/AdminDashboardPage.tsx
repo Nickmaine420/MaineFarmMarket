@@ -3,6 +3,7 @@ import { httpsCallable } from "firebase/functions";
 import { functions } from "../firebase";
 import { useAuth } from "../App";
 import { isAdminEmail } from "../utils/admin";
+import { formatMarketplaceLabel } from "../utils/display";
 
 type AdminReport = {
   id: string;
@@ -25,9 +26,10 @@ type AdminDispute = {
 
 type AdminOrder = {
   id: string;
-  status?: string;
-  paymentMode?: string;
-  paymentStatus?: string;
+  status?: string | null;
+  paymentMode?: string | null;
+  paymentStatus?: string | null;
+  missingLegacyFields?: string[];
   disputeStatus?: string | null;
   totalCents?: number;
   refundedCents?: number;
@@ -248,7 +250,10 @@ export default function AdminDashboardPage() {
                       </div>
                       <div className="text-right text-sm font-semibold">{money(order.totalCents)}</div>
                     </div>
-                    <div className="mt-2 text-sm text-stone-700">{order.status} · {order.paymentMode} · {order.paymentStatus}</div>
+                    <div className="mt-2 text-sm text-stone-700">
+                      {formatMarketplaceLabel(order.status, "Legacy — status not recorded")} · {formatMarketplaceLabel(order.paymentMode, "Payment method not recorded")} · {formatMarketplaceLabel(order.paymentStatus, "Payment status not recorded")}
+                    </div>
+                    {order.missingLegacyFields?.length ? <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">This older order predates some tracking fields. Missing information is labeled instead of being guessed.</div> : null}
                     {order.refundedCents ? <div className="mt-1 text-sm text-amber-800">Refunded: {money(order.refundedCents)}</div> : null}
                     {refundable && (
                       <div className="mt-3 flex flex-wrap gap-2">

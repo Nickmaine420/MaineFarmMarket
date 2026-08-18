@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "../router";
-import { auth, db } from "../firebase";
+import { auth, db, functions } from "../firebase";
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
@@ -12,7 +11,9 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
 import { activeProductDiscount, effectiveProductPriceCents } from "../utils/marketplaceFeatures";
+import { getCurrentCoordinates } from "../utils/location";
 
 type AnyDoc = Record<string, any>;
 
@@ -120,6 +121,7 @@ export default function BuyerDashboard() {
   const [notice, setNotice] = useState("");
   const [reportTarget, setReportTarget] = useState<AnyDoc | null>(null);
   const [reportReason, setReportReason] = useState("");
+  const [reportError, setReportError] = useState("");
   const [blockTarget, setBlockTarget] = useState<{
     product: AnyDoc;
     farm: AnyDoc | null;
@@ -447,26 +449,35 @@ export default function BuyerDashboard() {
 
   async function submitListingReport() {
     const user = auth.currentUser;
-    if (!user || !reportTarget || !reportReason.trim()) return;
+    if (!user || !reportTarget) return;
+    const reason = reportReason.replace(/\s+/g, " ").trim();
+    if (reason.length < 20 || reason.split(" ").length < 4) {
+      setReportError("Please provide at least 20 characters and four meaningful words.");
+      return;
+    }
 
     try {
-      await addDoc(collection(db, "reports"), {
-        reporterId: user.uid,
-        type: "listing",
+      setReportError("");
+      const submitReport = httpsCallable<
+        { listingId: string; reason: string },
+        { reportId: string; status: string }
+      >(functions, "submitListingReport");
+      await submitReport({
         listingId: String(reportTarget.id),
-        reportedUserId: String(
-          reportTarget.producerUid || reportTarget.producerId || ""
-        ),
-        reason: reportReason.trim().slice(0, 1000),
-        status: "open",
-        createdAt: serverTimestamp(),
+        reason,
       });
       setNotice("Report received. Thank you for helping keep the marketplace safe.");
       setReportTarget(null);
       setReportReason("");
+      setReportError("");
     } catch (error) {
       console.error("Listing report failed:", error);
-      setNotice("We could not submit the report. Please try again or contact support.");
+      const message = error instanceof Error ? error.message : "";
+      setReportError(
+        message.includes("already reported") || message.includes("Too many reports")
+          ? message.replace(/^Firebase:\s*/i, "")
+          : "We could not submit the report. Please review the details and try again."
+      );
     }
   }
 
@@ -499,18 +510,12 @@ export default function BuyerDashboard() {
   async function requestLocation() {
     setLocBusy(true);
     try {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 10000,
-        })
-      );
-      const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      const loc = await getCurrentCoordinates();
       setBuyerLoc(loc);
       localStorage.setItem(BUYER_LOC_KEY, JSON.stringify(loc));
     } catch (e) {
       console.error(e);
-      setNotice("Unable to get your location. Please allow location access in your browser.");
+      setNotice("Unable to get your location. Allow location access in Android Settings and try again.");
     } finally {
       setLocBusy(false);
     }
@@ -657,10 +662,10 @@ export default function BuyerDashboard() {
                 <img
                   src={product.photoUrl || product.imageUrl || product.image}
                   alt={product.name || product.title || "Product"}
-                  className="w-full h-56 object-cover"
+                  className="h-44 w-full object-cover sm:h-52"
                 />
               ) : (
-                <div className="w-full h-56 bg-stone-200" />
+                <div className="h-44 w-full bg-stone-200 sm:h-52" />
               )}
 
               <div className="p-4">
@@ -735,6 +740,7 @@ export default function BuyerDashboard() {
                     onClick={() => {
                       setReportTarget(product);
                       setReportReason("");
+                      setReportError("");
                     }}
                     className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900"
                   >
@@ -791,22 +797,34 @@ export default function BuyerDashboard() {
               </p>
               <textarea
                 autoFocus
+                minLength={20}
                 maxLength={1000}
                 value={reportReason}
-                onChange={(event) => setReportReason(event.target.value)}
+                onChange={(event) => {
+                  setReportReason(event.target.value);
+                  setReportError("");
+                }}
                 className="mt-4 min-h-32 w-full rounded-xl border border-stone-300 p-3"
               />
+              <div className="mt-1 flex justify-between gap-3 text-xs text-stone-500">
+                <span>At least 20 characters and four meaningful words.</span>
+                <span>{reportReason.length}/1000</span>
+              </div>
+              {reportError && <p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-900">{reportError}</p>}
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
                   className="rounded-xl bg-stone-100 px-4 py-2 font-bold"
-                  onClick={() => setReportTarget(null)}
+                  onClick={() => {
+                    setReportTarget(null);
+                    setReportError("");
+                  }}
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  disabled={!reportReason.trim()}
+                  disabled={reportReason.trim().length < 20 || reportReason.trim().split(/\s+/).length < 4}
                   className="rounded-xl bg-amber-700 px-4 py-2 font-bold text-white disabled:opacity-50"
                   onClick={submitListingReport}
                 >

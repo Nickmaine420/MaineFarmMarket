@@ -18,7 +18,12 @@ export default defineConfig({
         rollupOptions: {
           output: {
             manualChunks: {
-              firebase: ["firebase/app", "firebase/auth", "firebase/firestore", "firebase/functions", "firebase/storage"],
+              "firebase-core": ["firebase/app"],
+              "firebase-auth": ["firebase/auth"],
+              "firebase-firestore": ["firebase/firestore"],
+              "firebase-functions": ["firebase/functions"],
+              "firebase-storage": ["firebase/storage"],
+              "native-auth": ["@capacitor/core", "@capacitor-firebase/authentication"],
               react: ["react", "react-dom"],
             },
           },

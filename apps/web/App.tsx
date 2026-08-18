@@ -1,25 +1,8 @@
-import React, { useState, createContext, useContext, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, createContext, useContext, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate, useSearchParams } from './router';
 import { UserRole, UserProfile, SubscriptionStatus } from './types';
 
 import LandingPage from './pages/LandingPage';
-import OnboardingPage from './pages/OnboardingPage';
-import BuyerDashboard from './pages/BuyerDashboard';
-import ProducerDashboard from './pages/ProducerDashboard';
-import ProducerOnboardingPage from './pages/ProducerOnboardingPage';
-import ProducerTermsPage from './pages/ProducerTermsPage';
-import StripePayoutPage from './pages/StripePayoutPage';
-import UserAgreementPage from './pages/UserAgreementPage';
-import CartPage from './pages/CartPage';
-import BuyerOrdersPage from "./pages/BuyerOrdersPage";
-import ContactPage from "./pages/ContactPage";
-import AccountPage from "./pages/AccountPage";
-import OrderSuccessPage from "./pages/OrderSuccessPage";
-import AdminDashboardPage from "./pages/AdminDashboardPage";
-import EventsPage from "./pages/EventsPage";
-import PromotionsPage from "./pages/PromotionsPage";
-import PublicProducerProfilePage from "./pages/PublicProducerProfilePage";
-import ProducerGrowthPage from "./pages/ProducerGrowthPage";
 import { isAdminEmail } from "./utils/admin";
 
 import { auth, db, functions, isFirebaseEmulatorMode } from './firebase';
@@ -44,6 +27,33 @@ import {
   PlayPurchase,
   PlaySubscriptionDetails,
 } from './services/playBilling';
+
+const AccountPage = lazy(() => import("./pages/AccountPage"));
+const AdminDashboardPage = lazy(() => import("./pages/AdminDashboardPage"));
+const BuyerDashboard = lazy(() => import("./pages/BuyerDashboard"));
+const BuyerOrdersPage = lazy(() => import("./pages/BuyerOrdersPage"));
+const CartPage = lazy(() => import("./pages/CartPage"));
+const ContactPage = lazy(() => import("./pages/ContactPage"));
+const EventsPage = lazy(() => import("./pages/EventsPage"));
+const OnboardingPage = lazy(() => import("./pages/OnboardingPage"));
+const OrderSuccessPage = lazy(() => import("./pages/OrderSuccessPage"));
+const ProducerDashboard = lazy(() => import("./pages/ProducerDashboard"));
+const ProducerGrowthPage = lazy(() => import("./pages/ProducerGrowthPage"));
+const ProducerOnboardingPage = lazy(() => import("./pages/ProducerOnboardingPage"));
+const ProducerTermsPage = lazy(() => import("./pages/ProducerTermsPage"));
+const PromotionsPage = lazy(() => import("./pages/PromotionsPage"));
+const PublicProducerProfilePage = lazy(() => import("./pages/PublicProducerProfilePage"));
+const StripePayoutPage = lazy(() => import("./pages/StripePayoutPage"));
+const UserAgreementPage = lazy(() => import("./pages/UserAgreementPage"));
+
+const RouteLoading = () => (
+  <main className="grid min-h-[60vh] place-items-center px-6 text-center" role="status">
+    <div>
+      <div className="text-xl font-serif text-emerald-950">Loading Maine Farm Market…</div>
+      <div className="mt-2 text-sm text-stone-500">Bringing in the latest marketplace information.</div>
+    </div>
+  </main>
+);
 
 // --- Auth Context ---
 type AuthContextType = {
@@ -186,6 +196,10 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
         );
         firebaseUser = result.user;
       } else if (Capacitor.isNativePlatform()) {
+        // Firebase's web session and the Android authentication plugin keep
+        // independent caches. Clear the web session before opening the native
+        // chooser so a restored account cannot win the sign-in race.
+        await signOut(auth);
         const result = await signInWithGoogleAccountChooser();
         const idToken = result.credential?.idToken;
         if (!idToken) throw new Error("Google Sign-In did not return an ID token.");
@@ -869,6 +883,7 @@ export default function App() {
       <Router>
         <Header />
 
+        <Suspense fallback={<RouteLoading />}>
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/contact" element={<ContactPage />} />
@@ -1026,6 +1041,7 @@ export default function App() {
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
         <MobileBottomNavigation />
       </Router>
     </AuthProvider>

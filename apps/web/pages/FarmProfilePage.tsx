@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../App";
-import { db, storage } from "../firebase";
+import { db } from "../firebase";
+import { storage } from "../firebaseStorage";
 import { deleteField, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { hasUsPhoneNumber, isMaineZip } from "../utils/validation";
 import { MAX_PRODUCER_PROFILE_PHOTOS } from "@mfm/shared";
+import { getCurrentCoordinates } from "../utils/location";
 
 type ProfilePhoto = { url: string; alt: string; uploadedAt?: string };
 
@@ -114,29 +116,23 @@ export default function FarmProfilePage() {
     })();
   }, [user]);
 
-  const useMyLocation = () => {
-    if (!navigator.geolocation) {
-      setNotice({ tone: "error", message: "Location is not supported on this device." });
-      return;
+  const useMyLocation = async () => {
+    try {
+      setNotice({ tone: "info", message: "Requesting your location…" });
+      const position = await getCurrentCoordinates();
+      setLat(Number(position.lat.toFixed(6)));
+      setLng(Number(position.lng.toFixed(6)));
+      setNotice({
+        tone: "info",
+        message: "Location added. Buyers will only see an approximate location.",
+      });
+    } catch (error) {
+      console.error(error);
+      setNotice({
+        tone: "error",
+        message: "Location permission was not granted. Allow it in Android Settings and try again.",
+      });
     }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLat(Number(pos.coords.latitude.toFixed(6)));
-        setLng(Number(pos.coords.longitude.toFixed(6)));
-        setNotice({
-          tone: "info",
-          message: "Location added. Buyers will only see an approximate location.",
-        });
-      },
-      (err) => {
-        console.error(err);
-        setNotice({
-          tone: "error",
-          message: "Could not get your location. Check the app or browser permission.",
-        });
-      },
-      { enableHighAccuracy: true, timeout: 15000 }
-    );
   };
 
   const save = async () => {

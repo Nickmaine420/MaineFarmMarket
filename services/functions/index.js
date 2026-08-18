@@ -21,6 +21,7 @@ const {
   deriveBuyerOrderStatus,
   effectiveProductPriceCents,
   normalizeRequestedItems,
+  normalizeListingReportReason,
   pendingDirectProducerIds,
   validateScheduledAt,
 } = require("./marketplace");
@@ -91,6 +92,8 @@ const GOOGLE_PLAY_PRODUCER_PRODUCT_ID = "producer_monthly";
 const GOOGLE_PLAY_PRODUCER_BASE_PLAN_ID = "monthly";
 const DIRECT_ORDER_MAX_PER_HOUR = 5;
 const DIRECT_ORDER_MAX_PER_DAY = 20;
+const LISTING_REPORT_MAX_PER_HOUR = 3;
+const LISTING_REPORT_MAX_PER_DAY = 10;
 const ADMIN_EMAILS = new Set(["contactacontractorllc@gmail.com"]);
 const googlePlayAuth = new GoogleAuth({
   scopes: ["https://www.googleapis.com/auth/androidpublisher"],
@@ -141,6 +144,56 @@ function enforceOrderRateLimitInTransaction(tx, uid, snapshots, refs, nowMs) {
       throw new HttpsError(
         "resource-exhausted",
         "Too many orders were placed from this account. Please wait and try again."
+      );
+    }
+    tx.set(
+      ref,
+      {
+        uid,
+        count: count + 1,
+        updatedAt: FieldValue.serverTimestamp(),
+        expiresAt: Timestamp.fromMillis(nowMs + 48 * 60 * 60 * 1000),
+      },
+      { merge: true }
+    );
+  });
+}
+
+function listingReportRateLimitRefs(uid, listingId, nowMs) {
+  const hourBucket = Math.floor(nowMs / (60 * 60 * 1000));
+  const dayBucket = Math.floor(nowMs / (24 * 60 * 60 * 1000));
+  const dedupeId = createHash("sha256")
+    .update(`${uid}:${listingId}:${dayBucket}`)
+    .digest("hex");
+  return {
+    hourly: db.collection("report_rate_limits").doc(`${uid}_hour_${hourBucket}`),
+    daily: db.collection("report_rate_limits").doc(`${uid}_day_${dayBucket}`),
+    duplicate: db.collection("report_dedupes").doc(dedupeId),
+  };
+}
+
+function enforceListingReportRateLimitInTransaction(
+  tx,
+  uid,
+  snapshots,
+  refs,
+  nowMs
+) {
+  if (snapshots.duplicate.exists) {
+    throw new HttpsError(
+      "already-exists",
+      "You already reported this listing recently. Our team will review it."
+    );
+  }
+  [
+    { snapshot: snapshots.hourly, ref: refs.hourly, limit: LISTING_REPORT_MAX_PER_HOUR },
+    { snapshot: snapshots.daily, ref: refs.daily, limit: LISTING_REPORT_MAX_PER_DAY },
+  ].forEach(({ snapshot, ref, limit }) => {
+    const count = Number(snapshot.exists ? snapshot.get("count") : 0) || 0;
+    if (count >= limit) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many reports were submitted from this account. Please wait before reporting again."
       );
     }
     tx.set(
@@ -1888,6 +1941,18 @@ exports.releaseExpiredCheckoutReservations = onSchedule(
       expiredRateLimits.docs.forEach((document) => batch.delete(document.ref));
       await batch.commit();
     }
+    for (const collectionName of ["report_rate_limits", "report_dedupes"]) {
+      const expired = await db
+        .collection(collectionName)
+        .where("expiresAt", "<=", Timestamp.now())
+        .limit(500)
+        .get();
+      if (!expired.empty) {
+        const batch = db.batch();
+        expired.docs.forEach((document) => batch.delete(document.ref));
+        await batch.commit();
+      }
+    }
   }
 );
 
@@ -1969,6 +2034,77 @@ exports.openOrderDispute = onCall(async (request) => {
   return { disputeId: disputeRef.id, status: "open" };
 });
 
+exports.submitListingReport = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Please sign in first.");
+  assertVerifiedAccount(request);
+
+  const listingId = String(request.data?.listingId || "").trim();
+  if (!listingId || listingId.length > 128) {
+    throw new HttpsError("invalid-argument", "A valid listing is required.");
+  }
+
+  let reason;
+  try {
+    reason = normalizeListingReportReason(request.data?.reason);
+  } catch (error) {
+    throw new HttpsError("invalid-argument", error.message);
+  }
+
+  const nowMs = Date.now();
+  const listingRef = db.collection("products").doc(listingId);
+  const reportRef = db.collection("reports").doc();
+  const limits = listingReportRateLimitRefs(uid, listingId, nowMs);
+
+  return db.runTransaction(async (tx) => {
+    const [listing, hourly, daily, duplicate] = await Promise.all([
+      tx.get(listingRef),
+      tx.get(limits.hourly),
+      tx.get(limits.daily),
+      tx.get(limits.duplicate),
+    ]);
+    if (!listing.exists) {
+      throw new HttpsError("not-found", "This listing is no longer available.");
+    }
+    const listingData = listing.data() || {};
+    const reportedUserId = String(
+      listingData.producerId || listingData.producerUid || ""
+    );
+    if (!reportedUserId) {
+      throw new HttpsError("failed-precondition", "This listing cannot be reported right now.");
+    }
+    if (reportedUserId === uid) {
+      throw new HttpsError("failed-precondition", "You cannot report your own listing.");
+    }
+
+    enforceListingReportRateLimitInTransaction(
+      tx,
+      uid,
+      { hourly, daily, duplicate },
+      limits,
+      nowMs
+    );
+    tx.create(reportRef, {
+      reporterId: uid,
+      type: "listing",
+      listingId,
+      reportedUserId,
+      reason,
+      status: "open",
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    tx.create(limits.duplicate, {
+      reporterId: uid,
+      listingId,
+      reportId: reportRef.id,
+      createdAt: FieldValue.serverTimestamp(),
+      expiresAt: Timestamp.fromMillis(nowMs + 25 * 60 * 60 * 1000),
+    });
+    return { reportId: reportRef.id, status: "open" };
+  });
+});
+
 function serializeAdminDocument(document) {
   const data = document.data() || {};
   const serialized = {};
@@ -1990,11 +2126,15 @@ exports.getAdminDashboard = onCall(async (request) => {
     disputes: disputesSnapshot.docs.map(serializeAdminDocument),
     orders: ordersSnapshot.docs.map((document) => {
       const order = serializeAdminDocument(document);
+      const missingLegacyFields = ["status", "paymentMode", "paymentStatus"].filter(
+        (field) => !order[field] || String(order[field]).toLowerCase() === "unknown"
+      );
       return {
         id: order.id,
-        status: order.status || "unknown",
-        paymentMode: order.paymentMode || "unknown",
-        paymentStatus: order.paymentStatus || "unknown",
+        status: order.status || null,
+        paymentMode: order.paymentMode || null,
+        paymentStatus: order.paymentStatus || null,
+        missingLegacyFields,
         disputeStatus: order.disputeStatus || null,
         totalCents: Number(order.pricing?.totalCents || order.totalCents || 0),
         refundedCents: Number(order.refund?.refundedCents || 0),

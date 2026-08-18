@@ -32,7 +32,7 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Cancel order" }).first().click();
     await expect(page.getByRole("status")).toContainText("reserved inventory released");
-    await expect(page.locator("body")).toContainText("Status: cancelled");
+    await expect(page.locator("body")).toContainText("Status: Cancelled");
 
     await page.getByRole("button", { name: /Report a problem|Add dispute details/ }).first().click();
     await page.getByPlaceholder(/Describe the problem/).fill(
@@ -49,7 +49,28 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await page.getByRole("button", { name: /^Orders(?: \(\d+\))?$/ }).click();
     await expect(page.getByText(/Arrange payment directly with the buyer/)).toBeVisible();
     await page.getByRole("button", { name: "Accept", exact: true }).first().click();
-    await expect(page.getByText(/Order .* ACCEPTED/)).toBeVisible();
+    await expect(page.getByText(/Order .* Accepted/)).toBeVisible();
+  });
+
+  test("listing reports require detail and reject rapid duplicates", async ({ page }) => {
+    await page.goto("/#/");
+    await page.getByRole("button", { name: /Shop the Market/ }).click();
+    await page.getByRole("button", { name: "Report listing" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Report listing" });
+    await dialog.getByRole("textbox").fill("short");
+    await expect(dialog.getByRole("button", { name: "Submit report" })).toBeDisabled();
+    await dialog.getByRole("textbox").fill(
+      "This automated test listing needs a complete safety review."
+    );
+    await dialog.getByRole("button", { name: "Submit report" }).click();
+    await expect(page.getByRole("status")).toContainText("Report received");
+
+    await page.getByRole("button", { name: "Report listing" }).first().click();
+    await page.getByRole("dialog", { name: "Report listing" }).getByRole("textbox").fill(
+      "This automated test listing still needs a safety review."
+    );
+    await page.getByRole("dialog", { name: "Report listing" }).getByRole("button", { name: "Submit report" }).click();
+    await expect(page.getByRole("alert")).toContainText("already reported");
   });
 
   test("buyer can place a server-priced direct order from the marketplace", async ({ page }) => {
@@ -81,6 +102,7 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await expect(page.getByRole("heading", { name: "Test Pine Farm", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Producers we recommend" })).toBeVisible();
     await expect(page.getByText("Test River Farm").first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Harvest Market/ })).toBeVisible();
     await page.getByRole("link", { name: "Events", exact: true }).first().click();
     await expect(page.getByRole("heading", { name: "Maine market events" })).toBeVisible();
     await expect(page.getByRole("heading", { name: /Harvest Market/ })).toBeVisible();
@@ -123,6 +145,14 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await page.getByRole("button", { name: "Network", exact: true }).click();
     await expect(page.getByText("A trusted emulator test neighbor.")).toBeVisible();
     await expect(page.getByText("accepted", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "End partnership" }).click();
+    await expect(page.getByRole("status")).toContainText("Partnership ended");
+    const partnershipForm = page.locator("section").filter({ hasText: "Request a partnership" });
+    await partnershipForm.getByRole("combobox").selectOption("emulator-partner-producer");
+    await partnershipForm.getByLabel("Public partnership note").fill("Reopened by the automated regression test.");
+    await partnershipForm.getByRole("button", { name: "Send request" }).click();
+    await expect(page.getByRole("status")).toContainText("Partnership request sent");
+    await expect(page.getByText("pending", { exact: true })).toBeVisible();
   });
 
   test("producer can add, archive, and restore a public profile photo", async ({ page }) => {
@@ -193,6 +223,8 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await expect(page.getByRole("heading", { name: "Your Orders" })).toBeVisible();
     await appNavigation.getByRole("link", { name: "Cart", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Cart" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Browse the market" })).toBeVisible();
+    await expect(page.getByText("Delivery / Pickup")).toHaveCount(0);
     await appNavigation.getByRole("link", { name: "Account", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Account and safety" })).toBeVisible();
     await appNavigation.getByRole("link", { name: "Market", exact: true }).click();

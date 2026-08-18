@@ -190,7 +190,7 @@ describe("marketplace Firestore rules", () => {
     }));
   });
 
-  test("listing reports must identify the listing's actual producer", async () => {
+  test("listing reports and report limits are server-only", async () => {
     await environment.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), "products/product-1"), validProduct);
     });
@@ -204,11 +204,23 @@ describe("marketplace Firestore rules", () => {
       status: "open",
       createdAt: serverTimestamp(),
     };
-    await assertSucceeds(setDoc(doc(database, "reports/valid"), report));
+    await assertFails(setDoc(doc(database, "reports/valid"), report));
     await assertFails(
       setDoc(doc(database, "reports/spoofed"), {
         ...report,
         reportedUserId: "unrelated-user",
+      })
+    );
+    await assertFails(
+      setDoc(doc(database, "report_rate_limits/fake"), {
+        uid: "buyer-1",
+        count: 1,
+      })
+    );
+    await assertFails(
+      setDoc(doc(database, "report_dedupes/fake"), {
+        reporterId: "buyer-1",
+        listingId: "product-1",
       })
     );
   });
@@ -313,6 +325,16 @@ describe("marketplace Firestore rules", () => {
     await assertFails(updateDoc(doc(producer, "producerPartnerships/producer-1__producer-2"), { status: "accepted" }));
     await assertSucceeds(updateDoc(doc(secondProducer, "producerPartnerships/producer-1__producer-2"), { status: "accepted" }));
     await assertSucceeds(getDoc(doc(buyer, "producerPartnerships/producer-1__producer-2")));
+    await assertSucceeds(updateDoc(doc(producer, "producerPartnerships/producer-1__producer-2"), { status: "cancelled" }));
+    await assertSucceeds(updateDoc(doc(secondProducer, "producerPartnerships/producer-1__producer-2"), {
+      requestedBy: "producer-2",
+      status: "pending",
+      pickupEnabled: false,
+      deliveryEnabled: true,
+      publicNote: "A new delivery partnership request.",
+    }));
+    await assertFails(updateDoc(doc(secondProducer, "producerPartnerships/producer-1__producer-2"), { status: "accepted" }));
+    await assertSucceeds(updateDoc(doc(producer, "producerPartnerships/producer-1__producer-2"), { status: "accepted" }));
   });
 });
 

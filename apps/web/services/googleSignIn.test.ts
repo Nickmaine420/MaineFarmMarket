@@ -5,7 +5,9 @@ describe("signInWithGoogleAccountChooser", () => {
   it("clears the previous selection before opening Google sign-in", async () => {
     const calls: string[] = [];
     const authClient = {
-      signOut: vi.fn(),
+      signOut: vi.fn(async () => {
+        calls.push("signOut");
+      }),
       signInWithGoogle: vi.fn(async () => {
         calls.push("signInWithGoogle");
         return {} as never;
@@ -19,7 +21,7 @@ describe("signInWithGoogleAccountChooser", () => {
 
     await signInWithGoogleAccountChooser(authClient, chooserClient);
 
-    expect(calls).toEqual(["clearLastAccount", "signInWithGoogle"]);
+    expect(calls).toEqual(["signOut", "clearLastAccount", "signInWithGoogle"]);
     expect(authClient.signInWithGoogle).toHaveBeenCalledWith({
       skipNativeAuth: true,
       useCredentialManager: false,
@@ -28,7 +30,7 @@ describe("signInWithGoogleAccountChooser", () => {
 
   it("does not risk silent account reuse when clearing fails", async () => {
     const authClient = {
-      signOut: vi.fn(),
+      signOut: vi.fn().mockResolvedValue(undefined),
       signInWithGoogle: vi.fn().mockResolvedValue({}),
     };
     const chooserClient = {
@@ -39,6 +41,22 @@ describe("signInWithGoogleAccountChooser", () => {
       signInWithGoogleAccountChooser(authClient, chooserClient)
     ).rejects.toThrow("clear failed");
 
+    expect(authClient.signInWithGoogle).not.toHaveBeenCalled();
+  });
+
+  it("does not open Google sign-in when the native session cannot be cleared", async () => {
+    const authClient = {
+      signOut: vi.fn().mockRejectedValue(new Error("sign out failed")),
+      signInWithGoogle: vi.fn().mockResolvedValue({}),
+    };
+    const chooserClient = {
+      clearLastAccount: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      signInWithGoogleAccountChooser(authClient, chooserClient)
+    ).rejects.toThrow("sign out failed");
+    expect(chooserClient.clearLastAccount).not.toHaveBeenCalled();
     expect(authClient.signInWithGoogle).not.toHaveBeenCalled();
   });
 });

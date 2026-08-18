@@ -6,7 +6,7 @@ import { PRICING } from '../constants';
 import { getGoogleSignInErrorMessage } from '../utils/authErrors';
 
 const LandingPage = () => {
-  const { login, user } = useAuth();
+  const { login, user, loading } = useAuth();
   const navigate = useNavigate();
   const [signInError, setSignInError] = useState("");
   const [signingInRole, setSigningInRole] = useState<UserRole | null>(null);
@@ -31,6 +31,19 @@ const LandingPage = () => {
       setSigningInRole(null);
     }
   };
+
+  // Wait for persisted Firebase authentication to hydrate before accepting a
+  // sign-in tap. This prevents a restored session from racing the account picker.
+  if (loading) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-stone-900 px-6 text-center text-white">
+        <div role="status">
+          <div className="text-2xl font-serif">Maine Farm Market</div>
+          <div className="mt-2 text-sm text-stone-300">Preparing secure sign-in…</div>
+        </div>
+      </main>
+    );
+  }
 
   // If already logged in, skip buttons entirely
   if (user) {
