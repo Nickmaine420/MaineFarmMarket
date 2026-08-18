@@ -19,6 +19,7 @@ const auth = getAuth();
 const now = Timestamp.now();
 const password = "MfmEmulatorTest2026!";
 const buyerIncomplete = process.argv.includes("--buyer-incomplete");
+const buyerAgreementPending = process.argv.includes("--buyer-agreement-pending");
 
 async function resetFirestoreEmulator() {
   const projectId = process.env.GCLOUD_PROJECT;
@@ -114,9 +115,9 @@ async function main() {
     buyerCity: buyerIncomplete ? "" : "Waterville",
     buyerState: "ME",
     buyerZip: buyerIncomplete ? "" : "04901",
-    acceptedUserAgreement: true,
-    acceptedUserAgreementAt: now,
-    userAgreementAcceptedAt: now,
+    acceptedUserAgreement: !buyerAgreementPending,
+    acceptedUserAgreementAt: buyerAgreementPending ? null : now,
+    userAgreementAcceptedAt: buyerAgreementPending ? null : now,
     updatedAt: now,
   });
   batch.set(db.collection("users").doc(partnerProducerUid), {

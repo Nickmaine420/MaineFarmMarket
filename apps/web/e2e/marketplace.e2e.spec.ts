@@ -1,12 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
-function seedEmulators(options: { buyerIncomplete?: boolean } = {}) {
+function seedEmulators(
+  options: { buyerIncomplete?: boolean; buyerAgreementPending?: boolean } = {}
+) {
   execFileSync(
     process.execPath,
     [
       "../../services/functions/scripts/seed-emulator.js",
       ...(options.buyerIncomplete ? ["--buyer-incomplete"] : []),
+      ...(options.buyerAgreementPending ? ["--buyer-agreement-pending"] : []),
     ],
     { cwd: process.cwd(), env: process.env, stdio: "inherit" }
   );
@@ -242,6 +245,42 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth
     );
     expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test("buyer agreement action stays above the mobile system navigation area", async ({
+    page,
+  }, testInfo) => {
+    test.skip(!testInfo.project.name.includes("mobile"), "Mobile agreement layout check");
+    seedEmulators({ buyerAgreementPending: true });
+    await page.goto("/#/");
+    await page.getByRole("button", { name: /Shop the Market/ }).click();
+    await expect(page.getByRole("heading", { name: "User Agreement" })).toBeVisible();
+
+    const continueButton = page.getByRole("button", { name: "Continue" });
+    await continueButton.scrollIntoViewIfNeeded();
+    const buttonBox = await continueButton.boundingBox();
+    expect(buttonBox).not.toBeNull();
+    const layout = await page.evaluate(() => {
+      const screen = document.querySelector<HTMLElement>(".mfm-agreement-screen");
+      const panel = document.querySelector<HTMLElement>(".mfm-agreement-panel");
+      const screenStyle = screen ? getComputedStyle(screen) : null;
+      return {
+        innerHeight: window.innerHeight,
+        scrollY: window.scrollY,
+        documentHeight: document.documentElement.scrollHeight,
+        screenRect: screen?.getBoundingClientRect().toJSON(),
+        panelRect: panel?.getBoundingClientRect().toJSON(),
+        screenHeight: screenStyle?.height,
+        screenPaddingBottom: screenStyle?.paddingBottom,
+      };
+    });
+    const buttonDocumentBottom = layout.scrollY + buttonBox!.y + buttonBox!.height;
+    const bottomClearance = layout.documentHeight - buttonDocumentBottom;
+    expect(
+      buttonBox!.y + buttonBox!.height,
+      JSON.stringify(layout)
+    ).toBeLessThanOrEqual((layout.panelRect?.bottom ?? 0) + 1);
+    expect(bottomClearance, JSON.stringify(layout)).toBeGreaterThanOrEqual(40);
   });
 
   test("producer dashboard actions and navigation fit a mobile viewport", async ({

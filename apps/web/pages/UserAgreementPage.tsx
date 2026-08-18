@@ -83,8 +83,8 @@ export default function UserAgreementPage() {
   };
 
   return (
-    <div className="mfm-safe-screen flex flex-col items-center bg-[#efe1b6] px-4 sm:px-6">
-      <div className="flex max-h-[calc(100dvh-3rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-full max-w-2xl flex-col rounded-2xl bg-white p-5 shadow-lg sm:p-6">
+    <div className="mfm-safe-screen mfm-agreement-screen flex flex-col items-center bg-[#efe1b6] px-4 sm:px-6">
+      <div className="mfm-agreement-panel flex w-full max-w-2xl flex-col rounded-2xl bg-white p-5 shadow-lg sm:p-6">
         <h1 className="text-2xl font-bold text-stone-800 mb-4">User Agreement</h1>
         <p className="text-sm text-stone-600 mb-4">Please read and accept the agreement below to continue.</p>
         {errorMessage && (

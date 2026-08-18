@@ -44,6 +44,26 @@
     padding-top: max(1.5rem, env(safe-area-inset-top));
     padding-bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem));
   }
+
+  .mfm-agreement-screen {
+    box-sizing: border-box;
+    /* The global app header remains in normal document flow above this page. */
+    height: calc(100svh - 4rem - 1px - env(safe-area-inset-top));
+  }
+
+  .mfm-agreement-panel {
+    height: 100%;
+    max-height: 100%;
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 48rem) {
+  .mfm-agreement-screen {
+    /* Some Android WebViews report a zero safe-area inset even when the
+       three-button navigation bar overlays the bottom of the page. */
+    padding-bottom: max(4rem, calc(env(safe-area-inset-bottom) + 1rem));
+  }
 }
 
 div.bg-stone-200:empty.h-40,
