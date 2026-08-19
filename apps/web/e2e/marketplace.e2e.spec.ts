@@ -256,30 +256,27 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await page.getByRole("button", { name: /Shop the Market/ }).click();
     await expect(page.getByRole("heading", { name: "User Agreement" })).toBeVisible();
 
+    const actions = page.locator(".mfm-agreement-actions");
     const continueButton = page.getByRole("button", { name: "Continue" });
-    await continueButton.scrollIntoViewIfNeeded();
+    await expect(actions).toBeVisible();
+    await expect(continueButton).toBeVisible();
     const buttonBox = await continueButton.boundingBox();
     expect(buttonBox).not.toBeNull();
     const layout = await page.evaluate(() => {
-      const screen = document.querySelector<HTMLElement>(".mfm-agreement-screen");
-      const panel = document.querySelector<HTMLElement>(".mfm-agreement-panel");
-      const screenStyle = screen ? getComputedStyle(screen) : null;
+      const actions = document.querySelector<HTMLElement>(".mfm-agreement-actions");
+      const actionStyle = actions ? getComputedStyle(actions) : null;
       return {
         innerHeight: window.innerHeight,
-        scrollY: window.scrollY,
-        documentHeight: document.documentElement.scrollHeight,
-        screenRect: screen?.getBoundingClientRect().toJSON(),
-        panelRect: panel?.getBoundingClientRect().toJSON(),
-        screenHeight: screenStyle?.height,
-        screenPaddingBottom: screenStyle?.paddingBottom,
+        actionRect: actions?.getBoundingClientRect().toJSON(),
+        actionPosition: actionStyle?.position,
       };
     });
-    const buttonDocumentBottom = layout.scrollY + buttonBox!.y + buttonBox!.height;
-    const bottomClearance = layout.documentHeight - buttonDocumentBottom;
+    const bottomClearance = layout.innerHeight - (layout.actionRect?.bottom ?? layout.innerHeight);
+    expect(layout.actionPosition).toBe("fixed");
     expect(
       buttonBox!.y + buttonBox!.height,
       JSON.stringify(layout)
-    ).toBeLessThanOrEqual((layout.panelRect?.bottom ?? 0) + 1);
+    ).toBeLessThanOrEqual((layout.actionRect?.bottom ?? 0) + 1);
     expect(bottomClearance, JSON.stringify(layout)).toBeGreaterThanOrEqual(40);
   });
 

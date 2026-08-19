@@ -64,6 +64,27 @@
        three-button navigation bar overlays the bottom of the page. */
     padding-bottom: max(4rem, calc(env(safe-area-inset-bottom) + 1rem));
   }
+
+  .mfm-agreement-panel {
+    padding-bottom: 11rem;
+  }
+
+  .mfm-agreement-actions {
+    position: fixed;
+    right: 1rem;
+    bottom: max(4rem, calc(env(safe-area-inset-bottom) + 1rem));
+    left: 1rem;
+    z-index: 60;
+    box-sizing: border-box;
+    width: auto;
+    max-width: 40rem;
+    margin-inline: auto;
+    padding: 0.75rem 1rem 1rem;
+    border: 1px solid rgb(214 211 209);
+    border-radius: 1rem;
+    background: white;
+    box-shadow: 0 -12px 28px rgb(41 37 36 / 14%);
+  }
 }
 
 div.bg-stone-200:empty.h-40,

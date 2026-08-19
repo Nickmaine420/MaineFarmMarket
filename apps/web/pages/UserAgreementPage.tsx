@@ -95,23 +95,25 @@ export default function UserAgreementPage() {
         <div className="flex-1 min-h-0 overflow-y-auto border border-stone-200 rounded-lg p-4 mb-6 bg-stone-50">
           <pre className="whitespace-pre-wrap font-sans text-sm text-stone-700">{AGREEMENT_TEXT}</pre>
         </div>
-        <label className="flex items-center gap-3 mb-4 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={agreed}
-            onChange={(e) => setAgreed(e.target.checked)}
-            className="w-5 h-5 rounded border-stone-300"
-          />
-          <span className="font-medium text-stone-800">I agree</span>
-        </label>
-        <button
-          onClick={handleContinue}
-          disabled={!agreed || submitting}
-          className="min-h-12 w-full shrink-0 rounded-xl py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ background: agreed && !submitting ? "#0f7a4a" : "#888" }}
-        >
-          {submitting ? "Saving…" : "Continue"}
-        </button>
+        <div className="mfm-agreement-actions">
+          <label className="mb-4 flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              className="h-5 w-5 rounded border-stone-300"
+            />
+            <span className="font-medium text-stone-800">I agree</span>
+          </label>
+          <button
+            onClick={handleContinue}
+            disabled={!agreed || submitting}
+            className="min-h-12 w-full shrink-0 rounded-xl py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ background: agreed && !submitting ? "#0f7a4a" : "#888" }}
+          >
+            {submitting ? "Saving…" : "Continue"}
+          </button>
+        </div>
       </div>
     </div>
   );
