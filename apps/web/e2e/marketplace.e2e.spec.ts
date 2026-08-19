@@ -247,6 +247,45 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     expect(overflow).toBeLessThanOrEqual(1);
   });
 
+  test("privacy and account-deletion pages always provide a route back", async ({
+    page,
+  }, testInfo) => {
+    await page.goto("/#/");
+    await page.getByRole("button", { name: /Shop the Market/ }).click();
+    await expect(page.getByRole("heading", { name: "Fresh from Maine" })).toBeVisible();
+
+    if (testInfo.project.name.includes("mobile")) {
+      await page.getByRole("button", { name: "Open navigation menu" }).click();
+      await page
+        .getByRole("navigation", { name: "Mobile navigation" })
+        .getByRole("link", { name: "Privacy", exact: true })
+        .click();
+    } else {
+      await page
+        .getByRole("navigation", { name: "Primary navigation" })
+        .getByRole("link", { name: "Privacy", exact: true })
+        .click();
+    }
+
+    await expect(
+      page.getByRole("heading", { name: "Maine Farm Market Privacy Policy" })
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Fresh from Maine" })).toBeVisible();
+
+    await page.goto("/privacy.html");
+    await expect(
+      page.getByRole("navigation", { name: "Privacy page navigation" })
+    ).toBeVisible();
+    await page.getByRole("link", { name: "account deletion page" }).click();
+    await expect(
+      page.getByRole("navigation", { name: "Account deletion page navigation" })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Maine Farm Market home" })
+    ).toBeVisible();
+  });
+
   test("buyer agreement action stays above the mobile system navigation area", async ({
     page,
   }, testInfo) => {

@@ -23,7 +23,13 @@ public class MainActivity extends BridgeActivity {
                 bridge.getWebView().evaluateJavascript(
                     "(function(){var state=window.history.state||{};" +
                     "var depth=Number(state.maineFarmMarketDepth||0);" +
-                    "if(depth>0){window.history.back();return true;}return false;})()",
+                    "if(depth>0){window.history.back();return true;}" +
+                    "var path=window.location.pathname||'';" +
+                    "if(/\\/(privacy|delete-account)\\.html$/.test(path)){" +
+                    "var sameOriginReferrer=false;try{sameOriginReferrer=!!document.referrer&&new URL(document.referrer).origin===window.location.origin;}catch(e){}" +
+                    "if(sameOriginReferrer&&window.history.length>1){window.history.back();}" +
+                    "else{window.location.replace('/#/');}return true;}" +
+                    "return false;})()",
                     result -> {
                         if (!"true".equals(result)) {
                             finish();

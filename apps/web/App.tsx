@@ -42,6 +42,7 @@ const ProducerGrowthPage = lazy(() => import("./pages/ProducerGrowthPage"));
 const ProducerOnboardingPage = lazy(() => import("./pages/ProducerOnboardingPage"));
 const ProducerTermsPage = lazy(() => import("./pages/ProducerTermsPage"));
 const PromotionsPage = lazy(() => import("./pages/PromotionsPage"));
+const PrivacyPolicyPage = lazy(() => import("./pages/PrivacyPolicyPage"));
 const PublicProducerProfilePage = lazy(() => import("./pages/PublicProducerProfilePage"));
 const StripePayoutPage = lazy(() => import("./pages/StripePayoutPage"));
 const UserAgreementPage = lazy(() => import("./pages/UserAgreementPage"));
@@ -761,9 +762,9 @@ const Header = () => {
           <Link to="/contact" className="mfm-nav-link">
             Contact
           </Link>
-          <a href="/privacy.html" className="mfm-nav-link">
+          <Link to="/privacy" className="mfm-nav-link">
             Privacy
-          </a>
+          </Link>
           {signedInLinks}
         </nav>
 
@@ -814,9 +815,9 @@ const Header = () => {
             <Link to="/contact" className="mfm-nav-link">
               Contact & support
             </Link>
-            <a href="/privacy.html" className="mfm-nav-link">
+            <Link to="/privacy" className="mfm-nav-link">
               Privacy
-            </a>
+            </Link>
             {signedInLinks}
           </div>
         </nav>
@@ -887,6 +888,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/contact" element={<ContactPage />} />
+          <Route path="/privacy" element={<PrivacyPolicyPage />} />
           <Route path="/events" element={<ProtectedRoute><EventsPage /></ProtectedRoute>} />
           <Route path="/promotions" element={<ProtectedRoute><PromotionsPage /></ProtectedRoute>} />
           <Route path="/producer-profile" element={<ProtectedRoute><PublicProducerProfilePage /></ProtectedRoute>} />

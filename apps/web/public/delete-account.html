@@ -6,7 +6,10 @@
     <title>Delete Your Account | Maine Farm Market</title>
     <style>
       body { margin: 0; background: #efe1b6; color: #292524; font: 16px/1.65 system-ui, sans-serif; }
-      main { max-width: 760px; margin: 0 auto; padding: 32px 18px 64px; }
+      .page-nav { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(12px, env(safe-area-inset-top)) 18px 12px; background: #fffefbf2; border-bottom: 1px solid #d6d3d1; backdrop-filter: blur(10px); }
+      .page-nav button, .page-nav a { min-height: 44px; box-sizing: border-box; display: inline-flex; align-items: center; border-radius: 12px; border: 1px solid #14532d; padding: 9px 14px; background: white; color: #14532d; font: inherit; font-weight: 750; text-decoration: none; cursor: pointer; }
+      .page-nav a { background: #14532d; color: white; }
+      main { max-width: 760px; margin: 0 auto; padding: 24px 18px max(64px, calc(env(safe-area-inset-bottom) + 32px)); }
       article { background: white; border-radius: 20px; padding: clamp(22px, 5vw, 48px); box-shadow: 0 8px 28px #0002; }
       h1, h2 { color: #23412c; line-height: 1.2; }
       a.button { display: inline-block; margin-top: 12px; border-radius: 12px; background: #166534; color: white; padding: 12px 18px; text-decoration: none; font-weight: 700; }
@@ -14,6 +17,10 @@
     </style>
   </head>
   <body>
+    <nav class="page-nav" aria-label="Account deletion page navigation">
+      <button id="back-button" type="button" aria-label="Back">&larr; Back</button>
+      <a href="/#/">Maine Farm Market home</a>
+    </nav>
     <main>
       <article>
         <h1>Delete your Maine Farm Market account</h1>
@@ -48,5 +55,18 @@
         <p>See the <a href="/privacy.html">Maine Farm Market Privacy Policy</a>.</p>
       </article>
     </main>
+    <script>
+      document.getElementById("back-button").addEventListener("click", function () {
+        var canReturn = false;
+        try {
+          canReturn = Boolean(document.referrer) && new URL(document.referrer).origin === window.location.origin;
+        } catch (error) {}
+        if (canReturn && window.history.length > 1) {
+          window.history.back();
+        } else {
+          window.location.assign("/#/");
+        }
+      });
+    </script>
   </body>
 </html>
