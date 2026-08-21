@@ -86,8 +86,8 @@ export default function PromotionsPage() {
               <div className="flex items-end justify-between gap-4"><div><p className="text-sm font-bold uppercase tracking-wider text-orange-700">Featured producers</p><h2 className="text-3xl font-serif">Promotion pages</h2></div></div>
               {participatingFarms.length === 0 ? <p className="mt-4 rounded-2xl bg-white p-6 text-stone-600">Producer promotion pages will appear here as they opt in.</p> : (
                 <div className="mt-4 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-                  {participatingFarms.map((farm) => <article key={farm.id} className="overflow-hidden rounded-2xl bg-white shadow">
-                    {farm.photos?.[0]?.url ? <img src={farm.photos[0].url} alt={farm.photos[0].alt || farm.farmName} className="h-44 w-full object-cover" /> : <div className="h-28 bg-emerald-900" />}
+                  {participatingFarms.map((farm) => <article key={farm.id} className="mfm-deferred-card overflow-hidden rounded-2xl bg-white shadow">
+                    {farm.photos?.[0]?.url ? <img src={farm.photos[0].url} alt={farm.photos[0].alt || farm.farmName} loading="lazy" decoding="async" className="h-44 w-full object-cover" /> : <div className="h-28 bg-emerald-900" />}
                     <div className="p-5"><h3 className="text-xl font-bold">{farm.promoHeadline || farm.farmName}</h3><p className="mt-2 text-sm text-stone-600">{farm.promoDescription || farm.description || `Fresh updates from ${farm.farmName}.`}</p><Link to={`/producer-profile?producerId=${encodeURIComponent(farm.id)}`} className="mt-4 inline-block rounded-xl bg-emerald-900 px-4 py-2 font-bold text-white">Visit producer</Link></div>
                   </article>)}
                 </div>

@@ -24,6 +24,8 @@ public class MainActivity extends BridgeActivity {
                     "(function(){var state=window.history.state||{};" +
                     "var depth=Number(state.maineFarmMarketDepth||0);" +
                     "if(depth>0){window.history.back();return true;}" +
+                    "var hash=window.location.hash||'';" +
+                    "if(hash.indexOf('#/start-subscription')===0){window.location.replace('/#/account');return true;}" +
                     "var path=window.location.pathname||'';" +
                     "if(/\\/(privacy|delete-account)\\.html$/.test(path)){" +
                     "var sameOriginReferrer=false;try{sameOriginReferrer=!!document.referrer&&new URL(document.referrer).origin===window.location.origin;}catch(e){}" +

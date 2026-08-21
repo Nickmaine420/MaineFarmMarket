@@ -45,6 +45,20 @@
     padding-bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem));
   }
 
+  .mfm-subscription-screen {
+    box-sizing: border-box;
+    padding-bottom: max(6rem, calc(env(safe-area-inset-bottom) + 2rem));
+  }
+
+  .mfm-subscription-actions {
+    padding-bottom: max(4.5rem, calc(env(safe-area-inset-bottom) + 1.5rem));
+  }
+
+  .mfm-deferred-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 22rem;
+  }
+
   .mfm-agreement-screen {
     box-sizing: border-box;
     /* The global app header remains in normal document flow above this page. */

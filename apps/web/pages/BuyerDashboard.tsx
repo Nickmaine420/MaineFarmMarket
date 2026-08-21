@@ -656,12 +656,15 @@ export default function BuyerDashboard() {
         )}
 
         <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-          {enrichedProducts.map(({ product, farm, miles }) => (
-            <div key={product.id} className="bg-white rounded-2xl overflow-hidden shadow">
+          {enrichedProducts.map(({ product, farm, miles }, index) => (
+            <div key={product.id} className="mfm-deferred-card bg-white rounded-2xl overflow-hidden shadow">
               {product.photoUrl || product.imageUrl || product.image ? (
                 <img
                   src={product.photoUrl || product.imageUrl || product.image}
                   alt={product.name || product.title || "Product"}
+                  loading={index < 2 ? "eager" : "lazy"}
+                  decoding="async"
+                  fetchPriority={index < 2 ? "high" : "auto"}
                   className="h-44 w-full object-cover sm:h-52"
                 />
               ) : (

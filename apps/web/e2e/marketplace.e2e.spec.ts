@@ -106,8 +106,15 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await expect(page.getByRole("heading", { name: "Producers we recommend" })).toBeVisible();
     await expect(page.getByText("Test River Farm").first()).toBeVisible();
     await expect(page.getByRole("heading", { name: /Harvest Market/ })).toBeVisible();
-    await page.getByRole("link", { name: "Events", exact: true }).first().click();
+    await page
+      .locator('a[href*="/events?producer=emulator-producer"]')
+      .first()
+      .click();
     await expect(page.getByRole("heading", { name: "Maine market events" })).toBeVisible();
+    await expect(page.getByLabel("Producer")).toHaveValue("emulator-producer");
+    await expect(
+      page.getByText("Showing upcoming appearances for Test Pine Farm.")
+    ).toBeVisible();
     await expect(page.getByRole("heading", { name: /Harvest Market/ })).toBeVisible();
     if (testInfo.project.name.includes("mobile")) {
       await page.getByRole("navigation", { name: "App navigation" }).getByRole("link", { name: "Deals", exact: true }).click();
@@ -187,7 +194,7 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await expect(page.getByRole("img", { name: "Test farm stand" })).toBeVisible();
   });
 
-  test("first-time buyer completes setup without a loading or redirect loop", async ({ page }) => {
+  test("first-time buyer completes setup without a loading or redirect loop", async ({ page }, testInfo) => {
     seedEmulators({ buyerIncomplete: true });
     await page.goto("/#/");
     await page.getByRole("button", { name: /Shop the Market/ }).click();
@@ -195,6 +202,20 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await expect(
       page.getByRole("heading", { name: "Welcome to Maine Farm Market" })
     ).toBeVisible();
+    if (testInfo.project.name.includes("mobile")) {
+      await page.getByRole("button", { name: "Open navigation menu" }).click();
+      const mobileNavigation = page.getByRole("navigation", { name: "Mobile navigation" });
+      await expect(
+        mobileNavigation.getByText("Finish this step before opening the marketplace tools.")
+      ).toBeVisible();
+      await expect(
+        mobileNavigation.getByRole("link", { name: "Finish buyer setup" })
+      ).toBeVisible();
+      await expect(
+        mobileNavigation.getByRole("link", { name: "Marketplace" })
+      ).toHaveCount(0);
+      await page.getByRole("button", { name: "Close navigation menu" }).click();
+    }
     await page.getByLabel("Mailing address").fill("12 Test Farm Road");
     await page.getByLabel("City or town").fill("Waterville");
     await page.getByLabel("ZIP code").fill("04901");
@@ -230,6 +251,14 @@ test.describe.serial("Maine Farm Market buyer and producer journeys", () => {
     await expect(page.getByText("Delivery / Pickup")).toHaveCount(0);
     await appNavigation.getByRole("link", { name: "Account", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Account and safety" })).toBeVisible();
+    const deletionOptions = page.locator("details").filter({
+      hasText: "Account deletion options",
+    });
+    await expect(deletionOptions).toBeVisible();
+    await expect(deletionOptions).not.toHaveAttribute("open", "");
+    await deletionOptions.locator("summary").click();
+    await expect(deletionOptions).toHaveAttribute("open", "");
+    await expect(page.getByRole("heading", { name: "Delete account", exact: true })).toBeVisible();
     await appNavigation.getByRole("link", { name: "Market", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Fresh from Maine" })).toBeVisible();
 

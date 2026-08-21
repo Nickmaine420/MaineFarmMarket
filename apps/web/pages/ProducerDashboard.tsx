@@ -554,20 +554,22 @@ const ProducerDashboard = () => {
                 <div className="space-y-4">
                   {products.map((p) => (
                     // ✅ Key fix: stack on mobile to prevent cramping/overlap
-                    <div key={p.id} className="border rounded-xl p-4 flex flex-col sm:flex-row gap-4 sm:items-center">
+                    <div key={p.id} className="mfm-deferred-card border rounded-xl p-4 flex flex-col sm:flex-row gap-4 sm:items-center">
                       {/* ✅ Image becomes full-width on mobile so content has room */}
                       {p.imageUrl ? (
                         <img
                           src={p.imageUrl}
                           alt={p.title || "Product"}
+                          loading="lazy"
+                          decoding="async"
                           className="w-full sm:w-28 h-44 sm:h-20 object-cover rounded-lg border"
                         />
                       ) : (
                         <div
                           aria-label="No product photo"
-                          className="grid h-44 w-full place-items-center rounded-lg border bg-stone-100 text-xs font-semibold text-stone-500 sm:h-20 sm:w-28"
+                          className="grid h-24 w-full place-items-center rounded-lg border bg-gradient-to-br from-emerald-50 to-amber-50 text-xs font-semibold text-emerald-900 sm:h-20 sm:w-28"
                         >
-                          No photo
+                          Photo not added
                         </div>
                       )}
 

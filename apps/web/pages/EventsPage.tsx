@@ -1,10 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   collectionGroup,
   deleteDoc,
   doc,
-  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
@@ -60,6 +59,9 @@ export default function EventsPage() {
   );
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [attendanceBusy, setAttendanceBusy] = useState<string | null>(null);
+  const attendanceByEventRef = useRef(
+    new Map<string, { ids: string[]; names: string[] }>()
+  );
 
   useEffect(() => {
     const unsubscribeFarms = onSnapshot(collection(db, "farms"), (snapshot) => {
@@ -70,21 +72,20 @@ export default function EventsPage() {
     const eventsQuery = query(collection(db, "events"), where("status", "==", "published"));
     const unsubscribeEvents = onSnapshot(
       eventsQuery,
-      async (snapshot) => {
+      (snapshot) => {
         try {
-          const rows = await Promise.all(
-            snapshot.docs.map(async (eventDoc) => {
-              const attendees = await getDocs(collection(db, "events", eventDoc.id, "attendees"));
-              return {
-                id: eventDoc.id,
-                ...eventDoc.data(),
-                attendeeIds: attendees.docs.map((attendee) => attendee.id),
-                attendeeNames: attendees.docs.map(
-                  (attendee) => String(attendee.data().farmName || "Maine producer")
-                ),
-              } as EventWithAttendees;
-            })
-          );
+          const rows = snapshot.docs.map((eventDoc) => {
+            const attendees = attendanceByEventRef.current.get(eventDoc.id) || {
+              ids: [],
+              names: [],
+            };
+            return {
+              id: eventDoc.id,
+              ...eventDoc.data(),
+              attendeeIds: attendees.ids,
+              attendeeNames: attendees.names,
+            } as EventWithAttendees;
+          });
           rows.sort((first, second) => toDate(first.startAt).getTime() - toDate(second.startAt).getTime());
           setEvents(rows);
           setLoading(false);
@@ -112,6 +113,7 @@ export default function EventsPage() {
           group.names.push(String(attendee.data().farmName || "Maine producer"));
           byEvent.set(eventId, group);
         });
+        attendanceByEventRef.current = byEvent;
         setEvents((current) =>
           current.map((event) => {
             const attendees = byEvent.get(event.id) || { ids: [], names: [] };
@@ -145,10 +147,14 @@ export default function EventsPage() {
 
   const attendingProducers = useMemo(() => {
     const ids = new Set(events.flatMap((event) => event.attendeeIds));
+    if (producer !== "all") ids.add(producer);
     return [...ids]
       .map((id) => ({ id, name: farms[id]?.farmName || "Maine producer" }))
       .sort((first, second) => first.name.localeCompare(second.name));
-  }, [events, farms]);
+  }, [events, farms, producer]);
+
+  const selectedProducerName =
+    producer === "all" ? "" : farms[producer]?.farmName || "Selected producer";
 
   const filteredEvents = useMemo(() => {
     const currentTime = Date.now();
@@ -216,6 +222,16 @@ export default function EventsPage() {
       const attendeeRef = doc(db, "events", event.id, "attendees", user.uid);
       if (event.attendeeIds.includes(user.uid)) {
         await deleteDoc(attendeeRef);
+        const currentAttendance = attendanceByEventRef.current.get(event.id) || {
+          ids: event.attendeeIds,
+          names: event.attendeeNames,
+        };
+        attendanceByEventRef.current.set(event.id, {
+          ids: currentAttendance.ids.filter((id) => id !== user.uid),
+          names: currentAttendance.names.filter(
+            (_, index) => currentAttendance.ids[index] !== user.uid
+          ),
+        });
         setEvents((current) =>
           current.map((entry) =>
             entry.id === event.id
@@ -236,6 +252,14 @@ export default function EventsPage() {
           producerId: user.uid,
           farmName,
           joinedAt: serverTimestamp(),
+        });
+        const currentAttendance = attendanceByEventRef.current.get(event.id) || {
+          ids: event.attendeeIds,
+          names: event.attendeeNames,
+        };
+        attendanceByEventRef.current.set(event.id, {
+          ids: [...currentAttendance.ids, user.uid],
+          names: [...currentAttendance.names, farmName],
         });
         setEvents((current) =>
           current.map((entry) =>
@@ -272,6 +296,20 @@ export default function EventsPage() {
         </div>
 
         {notice && <div role="status" className="mt-5 rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm text-emerald-950">{notice}</div>}
+        {producer !== "all" && (
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-stone-800">
+            <span>
+              Showing upcoming appearances for <strong>{selectedProducerName}</strong>.
+            </span>
+            <button
+              type="button"
+              onClick={() => setProducerFilter("all")}
+              className="min-h-11 rounded-lg bg-white px-4 py-2 font-bold text-emerald-900 shadow-sm"
+            >
+              View all producers
+            </button>
+          </div>
+        )}
 
         <section className="mt-6 grid gap-6 lg:grid-cols-[minmax(280px,360px)_1fr]">
           <aside className="space-y-5">
@@ -332,7 +370,7 @@ export default function EventsPage() {
                   const end = toDate(event.endAt);
                   const attending = Boolean(user && event.attendeeIds.includes(user.uid));
                   return (
-                    <article key={event.id} className="overflow-hidden rounded-2xl bg-white shadow">
+                    <article key={event.id} className="mfm-deferred-card overflow-hidden rounded-2xl bg-white shadow">
                       <div className="grid sm:grid-cols-[8rem_1fr]">
                         <div className="bg-[#d47a2a] p-5 text-center text-white">
                           <div className="text-sm font-bold uppercase">{start.toLocaleDateString(undefined, { month: "short" })}</div>

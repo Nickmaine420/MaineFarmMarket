@@ -494,8 +494,15 @@ const StartSubscription: React.FC = () => {
 
   if (nativeSubscriptionRequired) {
     return (
-      <main className="min-h-[70vh] bg-[#efe1b6] p-6">
+      <main className="mfm-subscription-screen min-h-[70vh] bg-[#efe1b6] px-4 py-6 sm:p-6">
         <section className="mx-auto max-w-xl rounded-2xl bg-white p-7 shadow-lg">
+          <button
+            type="button"
+            onClick={() => navigate("/account", { replace: true })}
+            className="mb-5 inline-flex min-h-11 items-center rounded-xl border border-emerald-900 px-4 py-2 text-sm font-bold text-emerald-950"
+          >
+            ← Back to account
+          </button>
           <h1 className="text-center text-2xl font-bold text-stone-900">
             Producer selling subscription
           </h1>
@@ -543,26 +550,28 @@ const StartSubscription: React.FC = () => {
                 </p>
               )}
 
-              <button
-                type="button"
-                onClick={purchaseNativeSubscription}
-                disabled={
-                  nativePurchaseLoading || nativeSubscription?.available !== true
-                }
-                className="mt-5 w-full rounded-xl bg-emerald-800 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {nativePurchaseLoading
-                  ? "Contacting Google Play…"
-                  : "Subscribe with Google Play"}
-              </button>
-              <button
-                type="button"
-                onClick={manuallyRestoreNativeSubscription}
-                disabled={nativePurchaseLoading}
-                className="mt-3 w-full rounded-xl bg-stone-100 px-5 py-3 font-bold text-stone-800 disabled:opacity-50"
-              >
-                Restore subscription
-              </button>
+              <div className="mfm-subscription-actions">
+                <button
+                  type="button"
+                  onClick={purchaseNativeSubscription}
+                  disabled={
+                    nativePurchaseLoading || nativeSubscription?.available !== true
+                  }
+                  className="mt-5 w-full rounded-xl bg-emerald-800 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {nativePurchaseLoading
+                    ? "Contacting Google Play…"
+                    : "Subscribe with Google Play"}
+                </button>
+                <button
+                  type="button"
+                  onClick={manuallyRestoreNativeSubscription}
+                  disabled={nativePurchaseLoading}
+                  className="mt-3 w-full rounded-xl bg-stone-100 px-5 py-3 font-bold text-stone-800 disabled:opacity-50"
+                >
+                  Restore subscription
+                </button>
+              </div>
 
               {nativeSubscription?.available === false && (
                 <p className="mt-3 text-center text-sm text-stone-600">
@@ -704,10 +713,26 @@ const Header = () => {
   }, [location.pathname, location.search]);
 
   const accountName = user?.displayName || user?.email;
+  const setupTarget = !user
+    ? null
+    : user.role === UserRole.BUYER
+      ? !user.userAgreementAcceptedAt
+        ? { to: "/agreement", label: "Review buyer agreement" }
+        : !user.buyerProfileComplete
+          ? { to: "/onboarding", label: "Finish buyer setup" }
+          : null
+      : user.producerTermsVersion !== PRODUCER_TERMS_VERSION ||
+          !user.producerTermsAcceptedAt
+        ? { to: "/producer/terms", label: "Review producer terms" }
+        : !user.producerOnboardingComplete
+          ? { to: "/producer/setup", label: "Finish producer setup" }
+          : user.subscriptionStatus !== SubscriptionStatus.ACTIVE
+            ? { to: "/start-subscription", label: "Manage selling subscription" }
+            : null;
+  const navigationReady = Boolean(user && !setupTarget);
   const homeTarget = user
-    ? user.role === UserRole.PRODUCER
-      ? "/producer?view=overview"
-      : "/buyer"
+    ? setupTarget?.to ||
+      (user.role === UserRole.PRODUCER ? "/producer?view=overview" : "/buyer")
     : "/";
 
   const signedInLinks = user ? (
@@ -740,7 +765,7 @@ const Header = () => {
   );
 
   return (
-    <header className="mfm-app-header sticky top-0 z-50 border-b border-stone-200 bg-white/95 shadow-sm backdrop-blur">
+    <header className="mfm-app-header sticky top-0 z-50 border-b border-stone-200 bg-white shadow-sm">
       <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-3 px-4 py-2">
         <Link
           to={homeTarget}
@@ -758,7 +783,7 @@ const Header = () => {
         </Link>
 
         <nav aria-label="Primary navigation" className="hidden items-center gap-1 xl:flex">
-          {user && <RoleNavigationLinks role={user.role} />}
+          {navigationReady && user && <RoleNavigationLinks role={user.role} />}
           <Link to="/contact" className="mfm-nav-link">
             Contact
           </Link>
@@ -810,8 +835,21 @@ const Header = () => {
               <span className="font-semibold text-stone-800">{accountName}</span>
             </p>
           )}
+          {setupTarget && (
+            <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
+              <p className="font-semibold">
+                Finish this step before opening the marketplace tools.
+              </p>
+              <Link
+                to={setupTarget.to}
+                className="mt-2 inline-flex min-h-11 items-center rounded-lg bg-emerald-800 px-4 py-2 font-bold text-white"
+              >
+                {setupTarget.label}
+              </Link>
+            </div>
+          )}
           <div className="grid gap-1 sm:grid-cols-2">
-            {user && <RoleNavigationLinks role={user.role} mobile />}
+            {navigationReady && user && <RoleNavigationLinks role={user.role} mobile />}
             <Link to="/contact" className="mfm-nav-link">
               Contact & support
             </Link>
@@ -849,7 +887,7 @@ const MobileBottomNavigation = () => {
       <div aria-hidden="true" className="h-20 xl:hidden" />
       <nav
         aria-label="App navigation"
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white/98 px-1 shadow-[0_-8px_24px_rgba(28,25,23,0.10)] backdrop-blur xl:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white px-1 shadow-[0_-6px_18px_rgba(28,25,23,0.08)] xl:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <div
@@ -863,7 +901,7 @@ const MobileBottomNavigation = () => {
                 key={item.to}
                 to={item.to}
                 aria-current={active ? "page" : undefined}
-                className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[0.68rem] font-bold transition ${
+                className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[0.68rem] font-bold transition-colors ${
                   active ? "bg-emerald-50 text-emerald-950" : "text-stone-600"
                 }`}
               >
